@@ -60,3 +60,33 @@ Internet -> Railway -> Auth Proxy (cookie login) -> Hermes Dashboard (port 9119)
 - [Hermes Agent Documentation](https://hermes-agent.nousresearch.com/docs)
 - [GitHub Repository](https://github.com/NousResearch/hermes-agent)
 - [Web Dashboard Guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
+
+## WMM fork
+
+This is `Web-My-Money`'s fork of [`mazshakibaii/hermes-agent-railway`](https://github.com/mazshakibaii/hermes-agent-railway), forked 2026-08-09 to fix a bug the upstream template can't fix via Railway config alone: nothing in `entrypoint.sh` configured a git credential helper, so git operations issued from Hermes's terminal-tool sandbox failed with `fatal: could not read Username for 'https://github.com'` even though `GH_TOKEN` was set correctly on the Railway service.
+
+**What changed vs. upstream**: `entrypoint.sh` now configures `credential.helper 'store --file=/root/.git-credentials'` and writes that file from `GH_TOKEN` unconditionally, before the `AUTO_UPDATE` git pull and before the dashboard/sandbox process starts accepting terminal-tool calls. It never prints the token; it only logs whether the bootstrap ran (`git-credential-bootstrap: configured` / `skipped`). See the `fix(entrypoint): bootstrap git credential helper from GH_TOKEN` commit on `main` for the full diff and rationale.
+
+### Staying in sync with upstream
+
+The `main` branch here is expected to drift intentionally (our fix lives only here). To pull upstream improvements without losing it:
+
+```bash
+git remote add upstream https://github.com/mazshakibaii/hermes-agent-railway.git   # once per clone
+git remote set-url --push upstream DISABLE                                        # we only fetch from upstream, never push to it
+git fetch upstream
+git merge upstream/main   # resolve conflicts, keeping the WMM entrypoint.sh credential-bootstrap block
+git push origin main
+```
+
+Re-check after merging that the git-credential bootstrap block at the top of `entrypoint.sh` (and this README section) survived the merge — upstream has no knowledge of it and a large upstream rewrite of `entrypoint.sh` could silently drop it.
+
+### Fast edit-deploy loop on Railway
+
+The `hermes` service on Railway (project `Cloud-Agents-Stack`) is configured to **build from source directly from this GitHub repo** via Railway's native GitHub build integration (not a manually-built/pushed Docker image). That means:
+
+1. Edit a file in this repo (e.g. `entrypoint.sh`), commit, and `git push origin main`.
+2. Railway detects the push and rebuilds/redeploys `hermes` automatically — no manual image build or Railway config change needed for ordinary code fixes.
+3. Watch build/deploy logs (`railway logs --service hermes` or the Railway MCP `get_logs` tool) to confirm the new deploy is healthy before considering the fix live.
+
+Only reach for a manual Docker image push if you need to bypass Railway's build entirely (e.g. testing a build environment Railway's builder can't reproduce) — for normal fixes, pushing to this repo is the whole deploy step.

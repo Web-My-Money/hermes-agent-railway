@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import string
@@ -320,6 +321,79 @@ RESTART_PATHS = {
     ("DELETE", "/api/env"),
 }
 
+# The single `hermes gateway run` process this proxy supervises serves the
+# DEFAULT profile — that is the one holding the Telegram and webhook platform
+# connections. A config write scoped to any other profile (Hermes Desktop
+# editing its own profile, say) cannot affect that process, so restarting it
+# only drops live platform connections and in-flight agent runs for nothing.
+GATEWAY_PROFILE = os.environ.get("HERMES_GATEWAY_PROFILE", "default")
+
+
+# Profiles whose SETUP is read-only through this proxy. The default profile
+# holds the tuned Telegram/webhook configuration; Hermes Desktop shares the
+# same REST surface, so a stray click in its Settings UI would silently
+# rewrite it. Hiding the profile in the UI is not an option (Hermes has no
+# hidden-profile feature) and would not be a guarantee anyway — this is
+# enforced server-side, before the request reaches Hermes.
+PROTECTED_PROFILES = frozenset(
+    p.strip()
+    for p in os.environ.get("HERMES_PROTECTED_PROFILES", GATEWAY_PROFILE).split(",")
+    if p.strip()
+)
+
+# Deliberate-friction escape hatch: set HERMES_CONFIG_UNLOCK=1 on the service
+# (and redeploy) to edit a protected profile on purpose. It cannot be flipped
+# from the dashboard or the desktop, which is the point.
+CONFIG_UNLOCK = os.environ.get("HERMES_CONFIG_UNLOCK", "").strip().lower() in (
+    "1", "true", "yes",
+)
+
+# Only the *setup* surface is locked. Chat, sessions and the WebSocket are
+# untouched, so a protected profile stays fully usable — it just cannot be
+# reconfigured. Skill/plugin toggles are NOT covered here.
+PROTECTED_WRITE_PREFIXES = ("/api/config", "/api/env")
+MUTATING_METHODS = frozenset({"PUT", "POST", "PATCH", "DELETE"})
+
+
+def _target_profile(request, body):
+    """Resolve which profile a request acts on.
+
+    Hermes takes it from `?profile=` or the JSON body's `profile` key (see
+    update_config in hermes_cli/web_server.py). Absent means the served
+    profile — which is exactly why an unscoped write is the dangerous case.
+    """
+    profile = request.query.get("profile", "")
+
+    if not profile and body:
+        try:
+            profile = (json.loads(body) or {}).get("profile") or ""
+        except Exception:
+            profile = ""
+
+    return profile or GATEWAY_PROFILE
+
+
+def _write_targets_gateway_profile(request, body):
+    """True when a config/env write can affect the running gateway process."""
+    if request.path != "/api/config":
+        return True
+
+    return _target_profile(request, body) == GATEWAY_PROFILE
+
+
+def _protected_write(request, body):
+    """Return the protected profile a request would rewrite, else None."""
+    if CONFIG_UNLOCK:
+        return None
+    if request.method not in MUTATING_METHODS:
+        return None
+    if not request.path.startswith(PROTECTED_WRITE_PREFIXES):
+        return None
+
+    profile = _target_profile(request, body)
+
+    return profile if profile in PROTECTED_PROFILES else None
+
 
 def volume_attached():
     return os.path.ismount(HERMES_HOME)
@@ -482,6 +556,25 @@ async def proxy(request):
         headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")}
 
         body = await request.read()
+
+        locked = _protected_write(request, body)
+        if locked:
+            # Refuse before the request reaches Hermes, so a protected
+            # profile's config cannot be rewritten from the dashboard or the
+            # desktop app at all.
+            return web.json_response(
+                {
+                    "error": "profile_write_protected",
+                    "detail": (
+                        f"Profile {locked!r} is write-protected on this "
+                        f"gateway. Edit a different profile, or set "
+                        f"HERMES_CONFIG_UNLOCK=1 on the service to override."
+                    ),
+                    "profile": locked,
+                },
+                status=403,
+            )
+
         async with session.request(
             request.method,
             url,
@@ -492,7 +585,11 @@ async def proxy(request):
             excluded = {"transfer-encoding", "content-encoding", "content-length"}
             proxy_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
             content = await resp.read()
-            if (request.method, request.path) in RESTART_PATHS and resp.status < 400:
+            if (
+                (request.method, request.path) in RESTART_PATHS
+                and resp.status < 400
+                and _write_targets_gateway_profile(request, body)
+            ):
                 start_gateway()
 
             content_type = resp.headers.get("content-type", "")

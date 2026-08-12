@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import string
@@ -320,6 +321,34 @@ RESTART_PATHS = {
     ("DELETE", "/api/env"),
 }
 
+# The single `hermes gateway run` process this proxy supervises serves the
+# DEFAULT profile — that is the one holding the Telegram and webhook platform
+# connections. A config write scoped to any other profile (Hermes Desktop
+# editing its own profile, say) cannot affect that process, so restarting it
+# only drops live platform connections and in-flight agent runs for nothing.
+GATEWAY_PROFILE = os.environ.get("HERMES_GATEWAY_PROFILE", "default")
+
+
+def _write_targets_gateway_profile(request, body):
+    """True when a config/env write can affect the running gateway process.
+
+    Hermes resolves the target profile from `?profile=` or the JSON body's
+    `profile` key (see update_config in hermes_cli/web_server.py). Env writes
+    are process-wide and always count.
+    """
+    if request.path != "/api/config":
+        return True
+
+    profile = request.query.get("profile", "")
+
+    if not profile and body:
+        try:
+            profile = (json.loads(body) or {}).get("profile") or ""
+        except Exception:
+            profile = ""
+
+    return not profile or profile == GATEWAY_PROFILE
+
 
 def volume_attached():
     return os.path.ismount(HERMES_HOME)
@@ -492,7 +521,11 @@ async def proxy(request):
             excluded = {"transfer-encoding", "content-encoding", "content-length"}
             proxy_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
             content = await resp.read()
-            if (request.method, request.path) in RESTART_PATHS and resp.status < 400:
+            if (
+                (request.method, request.path) in RESTART_PATHS
+                and resp.status < 400
+                and _write_targets_gateway_profile(request, body)
+            ):
                 start_gateway()
 
             content_type = resp.headers.get("content-type", "")

@@ -276,13 +276,16 @@ async def logout(request):
 
 @web.middleware
 async def auth_middleware(request, handler):
-    if request.path in ("/login", "/logout", "/api/health", "/api/status"):
+    # Proxy-local routes and public dashboard auth bootstrap.
+    if request.path in ("/login", "/logout", "/api/health"):
         return await handler(request)
 
-    # Let the Hermes Desktop use the same public URL by forwarding all
-    # dashboard API traffic to 127.0.0.1:9119. The dashboard's own basic-auth
-    # / token layer still protects the endpoints that need it.
-    # Keep the proxy-local gateway restart gated by the cookie.
+    # Let the Hermes Desktop and dashboard SPA use the same public URL by
+    # forwarding all dashboard auth / API traffic to 127.0.0.1:9119. The
+    # dashboard's own basic-auth / token layer still protects the endpoints
+    # that need it. Keep the proxy-local gateway restart gated by the cookie.
+    if request.path.startswith("/auth/"):
+        return await handler(request)
     if request.path.startswith("/api/") and request.path != "/api/gateway/restart":
         return await handler(request)
 

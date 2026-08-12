@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Cookie-based auth proxy for Hermes dashboard on Railway."""
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -9,8 +10,9 @@ import string
 import subprocess
 import sys
 import time
+from contextlib import suppress
 
-from aiohttp import web, ClientSession, WSMsgType
+from aiohttp import web, ClientError, ClientSession, WSMsgType
 
 HERMES_HOME = "/root/.hermes"
 UPSTREAM = "http://127.0.0.1:9119"
@@ -380,29 +382,93 @@ async def health(request):
     return web.json_response({"status": "ok"})
 
 
+# Headers that must NOT be forwarded onto the upstream WebSocket handshake.
+# aiohttp's ``ws_connect`` generates its own ``Sec-WebSocket-Key`` and validates
+# the server's ``Sec-WebSocket-Accept`` against it. Passing the *browser's* key
+# through (user headers win over aiohttp's) makes that validation compare against
+# the wrong key, and forwarding ``Sec-WebSocket-Extensions`` lets the upstream
+# negotiate permessage-deflate that this leg never agreed to — so frames arrive
+# compressed and undecodable. These are hop-by-hop headers by definition; the
+# proxy terminates one WebSocket and originates another.
+_WS_HOP_HEADERS = frozenset({
+    "host",
+    "transfer-encoding",
+    "connection",
+    "upgrade",
+    "content-length",
+    "sec-websocket-key",
+    "sec-websocket-version",
+    "sec-websocket-extensions",
+    "sec-websocket-accept",
+    "sec-websocket-protocol",
+})
+
+
 async def proxy_ws(request):
-    ws_client = web.WebSocketResponse()
+    # heartbeat keeps the socket warm through Railway's edge, which culls idle
+    # upgraded connections; without it a quiet Chat tab drops and reconnects.
+    ws_client = web.WebSocketResponse(heartbeat=30)
     await ws_client.prepare(request)
 
     async with ClientSession() as session:
         url = f"ws://127.0.0.1:9119{request.path_qs}"
-        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "transfer-encoding")}
-        async with session.ws_connect(url, headers=headers) as ws_upstream:
+        headers = {
+            k: v for k, v in request.headers.items()
+            if k.lower() not in _WS_HOP_HEADERS
+        }
 
-            async def forward(src, dst):
-                async for msg in src:
-                    if msg.type == WSMsgType.TEXT:
-                        await dst.send_str(msg.data)
-                    elif msg.type == WSMsgType.BINARY:
-                        await dst.send_bytes(msg.data)
-                    elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
-                        break
+        try:
+            async with session.ws_connect(
+                url, headers=headers, heartbeat=30
+            ) as ws_upstream:
 
-            import asyncio
-            await asyncio.gather(
-                forward(ws_client, ws_upstream),
-                forward(ws_upstream, ws_client),
+                async def forward(src, dst):
+                    """Relay one direction, then close the peer.
+
+                    Both halves are guarded. Previously a close on one side left
+                    the other half blocked in ``async for``; the next frame from
+                    the live side hit a closing transport and raised
+                    ``ClientConnectionResetError`` out of ``gather``, which
+                    aiohttp turned into "Error handling request" and an aborted
+                    connection. The desktop read that as a dead socket and
+                    reconnected ~2x/second.
+                    """
+                    try:
+                        async for msg in src:
+                            if msg.type == WSMsgType.TEXT:
+                                await dst.send_str(msg.data)
+                            elif msg.type == WSMsgType.BINARY:
+                                await dst.send_bytes(msg.data)
+                            elif msg.type in (
+                                WSMsgType.CLOSE,
+                                WSMsgType.CLOSING,
+                                WSMsgType.CLOSED,
+                                WSMsgType.ERROR,
+                            ):
+                                break
+                    except (OSError, ClientError, RuntimeError):
+                        # Peer went away mid-relay — normal at teardown.
+                        pass
+                    finally:
+                        # Propagate the close so the other half's ``async for``
+                        # ends instead of blocking until a write fails.
+                        with suppress(Exception):
+                            await dst.close()
+
+                await asyncio.gather(
+                    forward(ws_client, ws_upstream),
+                    forward(ws_upstream, ws_client),
+                    return_exceptions=True,
+                )
+        except (OSError, ClientError, RuntimeError) as e:
+            # The upstream handshake failed. Close the client socket cleanly so
+            # the desktop sees a WebSocket close instead of a TCP abort.
+            print(
+                f"proxy_ws: upstream {type(e).__name__}: {e}",
+                file=sys.stderr,
             )
+            with suppress(Exception):
+                await ws_client.close(code=1011, message=b"upstream unavailable")
 
     return ws_client
 

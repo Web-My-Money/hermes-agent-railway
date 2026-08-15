@@ -4,7 +4,7 @@
 import json
 import sys
 
-from config_redact import mask_config_response
+from config_redact import mask_config_response, _MASK
 
 COMPACT = dict(ensure_ascii=False, separators=(",", ":"))
 
@@ -33,39 +33,63 @@ def test_masks_all_three_secret_shapes():
 
     provider = got["custom_providers"][0]
     assert "api_key" in provider, "api_key key must stay present"
-    assert provider["api_key"] == "*" * len("sk-very-secret-123")
+    assert provider["api_key"] == _MASK
     assert provider["base_url"] == "https://x"
     assert provider["name"] == "openai"
 
     env = got["mcp_servers"]["filesystem"]["env"]
-    assert env["GITHUB_TOKEN"] == "*" * len("ghp_super_secret")
+    assert env["GITHUB_TOKEN"] == _MASK
     assert env["CLEAR_TEXT"] == "public-val"
     assert got["mcp_servers"]["filesystem"]["command"] == "node"
 
     ba = got["dashboard"]["basic_auth"]
     assert "password" in ba
-    assert ba["password"] == "*" * len("dash-secret-pass")
+    assert ba["password"] == _MASK
     assert ba["username"] == "admin"
 
     assert got["unchanged"] == {"level": 2, "labels": ["a", "b"], "active": True}
 
     expected = {
         "custom_providers": [
-            {"name": "openai", "api_key": "*" * 17, "base_url": "https://x"},
+            {"name": "openai", "api_key": _MASK, "base_url": "https://x"},
         ],
         "mcp_servers": {
             "filesystem": {
-                "env": {"GITHUB_TOKEN": "*" * len("ghp_super_secret"), "CLEAR_TEXT": "public-val"},
+                "env": {"GITHUB_TOKEN": _MASK, "CLEAR_TEXT": "public-val"},
                 "command": "node",
             }
         },
-        "dashboard": {"basic_auth": {"username": "admin", "password": "*" * 16}},
+        "dashboard": {"basic_auth": {"username": "admin", "password": _MASK}},
         "unchanged": {"level": 2, "labels": ["a", "b"], "active": True},
     }
     assert out == _enc(expected), (
         "redacted output must be byte-identical to compact encoding except masked values"
     )
     assert out != _enc(payload)
+
+
+def test_mask_is_length_independent():
+    payload = {
+        "custom_providers": [
+            {"api_key": "x"},
+        ],
+        "mcp_servers": {
+            "a": {"env": {"T": "a_very_long_token_value_that_must_not_leak_its_length"}},
+        },
+        "dashboard": {"basic_auth": {"password": "short"}},
+    }
+    got = json.loads(mask_config_response(_enc(payload)))
+
+    masks = [
+        got["custom_providers"][0]["api_key"],
+        got["mcp_servers"]["a"]["env"]["T"],
+        got["dashboard"]["basic_auth"]["password"],
+    ]
+    assert all(m == _MASK for m in masks)
+    assert len(set(masks)) == 1
+    assert len(_MASK) != 1 and len(_MASK) != len(payload["custom_providers"][0]["api_key"])
+    assert _MASK not in ("x", "short")
+    assert "very_long_token_value" not in got["mcp_servers"]["a"]["env"]["T"]
 
 
 def test_empty_secret_value_left_intact():

@@ -8,11 +8,15 @@ dashboard still renders; only the secret's value is replaced.
 
 import json
 
-_MASK = "*"
+_MASK = "***REDACTED***"
 
 
 def _mask(value):
-    return _MASK * len(value)
+    # Fixed-width placeholder: never echo the secret's length. Length is a
+    # fingerprint — it distinguishes token types and narrows a brute force for
+    # hand-set credentials. An authenticated dashboard session must learn
+    # nothing about the underlying value, not even its size.
+    return _MASK
 
 
 def _redact(data):

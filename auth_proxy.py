@@ -15,6 +15,8 @@ from contextlib import suppress
 
 from aiohttp import web, ClientError, ClientSession, WSMsgType
 
+from config_redact import mask_config_response
+
 HERMES_HOME = "/root/.hermes"
 UPSTREAM = "http://127.0.0.1:9119"
 USERNAME = os.environ.get("DASHBOARD_USER", "admin")
@@ -593,6 +595,12 @@ async def proxy(request):
                 start_gateway()
 
             content_type = resp.headers.get("content-type", "")
+            if (
+                request.method == "GET"
+                and request.path == "/api/config"
+                and "json" in content_type
+            ):
+                content = mask_config_response(content)
             if "text/html" in content_type:
                 html_headers = {k: v for k, v in proxy_headers.items() if k.lower() != "content-type"}
                 html = content.decode("utf-8", errors="replace")

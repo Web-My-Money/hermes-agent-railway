@@ -16,7 +16,7 @@ else
   echo "git-credential-bootstrap: skipped (GH_TOKEN not set)"
 fi
 
-AUTO_UPDATE="${AUTO_UPDATE:-true}"
+AUTO_UPDATE="${AUTO_UPDATE:-false}"
 
 if [ "$AUTO_UPDATE" = "true" ]; then
   echo "Checking for Hermes updates..."

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import string
 import subprocess
@@ -22,6 +23,17 @@ PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 SECRET = secrets.token_bytes(32)
 COOKIE = "hermes_auth"
 MAX_AGE = 7 * 86400
+
+# `/api/config` is useful to the dashboard and to the external health checks,
+# but the upstream gateway serializes provider credentials with the rest of the
+# configuration.  This proxy is the public trust boundary, so never relay
+# those values to a browser (or another service using the dashboard session).
+REDACTED_VALUE = "[REDACTED]"
+SENSITIVE_CONFIG_KEY = re.compile(
+    r"(?:^|[_-])(token|secret|password|passphrase|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|credential|authorization)(?:$|[_-])",
+    re.IGNORECASE,
+)
 
 if not PASSWORD:
     print("ERROR: DASHBOARD_PASSWORD must be set.", file=sys.stderr)
@@ -43,6 +55,24 @@ def check_token(token):
         return hmac.compare_digest(sig, expected)
     except Exception:
         return False
+
+
+def redact_config(value):
+    """Return a config-shaped value without credentials.
+
+    Key-based redaction deliberately preserves the rest of the response. That
+    keeps the dashboard's read-only settings view and the watchdog's config
+    drift checks useful while denying credential material at the public proxy.
+    """
+    if isinstance(value, dict):
+        return {
+            key: REDACTED_VALUE if SENSITIVE_CONFIG_KEY.search(str(key))
+            else redact_config(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_config(item) for item in value]
+    return value
 
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -593,6 +623,25 @@ async def proxy(request):
                 start_gateway()
 
             content_type = resp.headers.get("content-type", "")
+            if (
+                request.method == "GET"
+                and request.path == "/api/config"
+                and resp.status < 400
+                and "application/json" in content_type.lower()
+            ):
+                try:
+                    content = json.dumps(
+                        redact_config(json.loads(content)),
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                except (TypeError, ValueError, UnicodeDecodeError):
+                    # This endpoint has carried production credentials. A
+                    # malformed payload must fail closed, never bypass the
+                    # public trust boundary by being forwarded verbatim.
+                    print("proxy: /api/config was not valid JSON; refusing to relay it", file=sys.stderr)
+                    return web.json_response(
+                        {"error": "invalid_upstream_config"}, status=502
+                    )
             if "text/html" in content_type:
                 html_headers = {k: v for k, v in proxy_headers.items() if k.lower() != "content-type"}
                 html = content.decode("utf-8", errors="replace")

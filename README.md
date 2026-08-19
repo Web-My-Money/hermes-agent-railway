@@ -90,3 +90,4 @@ The `hermes` service on Railway (project `Cloud-Agents-Stack`) is configured to 
 3. Watch build/deploy logs (`railway logs --service hermes` or the Railway MCP `get_logs` tool) to confirm the new deploy is healthy before considering the fix live.
 
 Only reach for a manual Docker image push if you need to bypass Railway's build entirely (e.g. testing a build environment Railway's builder can't reproduce) — for normal fixes, pushing to this repo is the whole deploy step.
+# Trigger Railway rebuild

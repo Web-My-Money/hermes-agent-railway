@@ -16,6 +16,15 @@ else
   echo "git-credential-bootstrap: skipped (GH_TOKEN not set)"
 fi
 
+# ─── Runtime pip dependencies (previously in Railway startCommand override) ──
+# These are needed for the Telegram webhook server and were previously installed
+# via an inline startCommand that bypassed this entrypoint.
+if command -v uv >/dev/null 2>&1; then
+  VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install \
+    "python-telegram-bot[webhooks]==22.8" \
+    "aiohttp==3.14.3" --quiet 2>/dev/null || echo "WARN: pip deps install failed (non-fatal)"
+fi
+
 AUTO_UPDATE="${AUTO_UPDATE:-true}"
 
 if [ "$AUTO_UPDATE" = "true" ]; then

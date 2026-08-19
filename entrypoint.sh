@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+# deploy-trigger-test: 2026-08-19
 
 # WMM: configure a git credential helper so git operations issued from
 # Hermes's terminal-tool sandbox (and this script's own AUTO_UPDATE pull

@@ -61,17 +61,21 @@ fi
 # ─── Infisical CLI (required by wmm-env for headless secret retrieval) ─────────
 # wmm-credentials-gateway needs the Infisical CLI to actually fetch secrets from
 # the WMM vault using INFISICAL_API_URL + INFISICAL_TOKEN. Install once per boot.
-if ! command -v infisical >/dev/null 2>&1; then
-  echo "Installing Infisical CLI..."
+INFISICAL_VERSION="0.43.120"
+if ! command -v infisical >/dev/null 2>&1 || [ "$(infisical --version 2>/dev/null | tr -d '[:space:]')" != "$INFISICAL_VERSION" ]; then
+  echo "Installing Infisical CLI ${INFISICAL_VERSION}..."
   (
     set -e
-    export DEBIAN_FRONTEND=noninteractive
-    curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | bash
-    apt-get update -qq && apt-get install -y -qq infisical
-  ) && echo "infisical-cli: installed" \
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    URL="https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/infisical_${INFISICAL_VERSION}_linux_${ARCH}.tar.gz"
+    curl -fsSL -o /tmp/infisical.tar.gz "$URL"
+    tar -xzf /tmp/infisical.tar.gz -C /usr/local/bin infisical
+    chmod +x /usr/local/bin/infisical
+    rm -f /tmp/infisical.tar.gz
+  ) && echo "infisical-cli: installed ${INFISICAL_VERSION}" \
     || echo "WARN: infisical-cli install failed (non-fatal)"
 else
-  echo "infisical-cli: already installed"
+  echo "infisical-cli: already installed ${INFISICAL_VERSION}"
 fi
 
 # Register wmm-credentials-gateway in Hermes MCP config (config.yaml on volume).

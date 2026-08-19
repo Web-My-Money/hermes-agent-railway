@@ -58,6 +58,22 @@ else
   echo "WARN: GH_TOKEN not set — cannot install wmm-credentials"
 fi
 
+# ─── Infisical CLI (required by wmm-env for headless secret retrieval) ─────────
+# wmm-credentials-gateway needs the Infisical CLI to actually fetch secrets from
+# the WMM vault using INFISICAL_API_URL + INFISICAL_TOKEN. Install once per boot.
+if ! command -v infisical >/dev/null 2>&1; then
+  echo "Installing Infisical CLI..."
+  (
+    set -e
+    export DEBIAN_FRONTEND=noninteractive
+    curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | bash
+    apt-get update -qq && apt-get install -y -qq infisical
+  ) && echo "infisical-cli: installed" \
+    || echo "WARN: infisical-cli install failed (non-fatal)"
+else
+  echo "infisical-cli: already installed"
+fi
+
 # Register wmm-credentials-gateway in Hermes MCP config (config.yaml on volume).
 # Hermes reads mcp_servers from /root/.hermes/config.yaml directly.
 if [ -f /tmp/wmm-credentials/scripts/wmm-local-mcp.mjs ]; then

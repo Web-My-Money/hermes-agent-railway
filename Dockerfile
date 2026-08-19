@@ -9,7 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-RUN git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent
+# Pin the Hermes agent version so the image does not silently float on latest.
+# Update HERMES_REF deliberately after reviewing upstream release notes.
+ARG HERMES_REF=v2026.8.3
+RUN git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent \
+    && cd /opt/hermes-agent \
+    && git checkout "$HERMES_REF" \
+    && git submodule update --init --recursive
 
 WORKDIR /opt/hermes-agent
 RUN uv venv venv --python 3.11 \

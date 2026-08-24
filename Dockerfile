@@ -9,7 +9,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-RUN git clone --recurse-submodules https://github.com/NousResearch/hermes-agent.git /opt/hermes-agent
+# WMM: build from our own fork, not upstream directly. Two reasons:
+#   1. It is the only way a WMM patch can reach production — this repo carries no
+#      Python source, so /opt/hermes-agent is whatever this clone pulls.
+#   2. Upstream was cloned unpinned, so every image rebuild silently adopted
+#      whatever NousResearch/main happened to be that day (observed 2026-08-24:
+#      a rebuild moved production from 0.20.4 to 0.20.5 with no code change on
+#      our side). The fork's main only moves when WMM merges.
+# Rebase the fork on upstream deliberately; do not point this back at upstream.
+RUN git clone --recurse-submodules --branch main https://github.com/Web-My-Money/hermes-agent.git /opt/hermes-agent
 
 WORKDIR /opt/hermes-agent
 RUN uv venv venv --python 3.11 \

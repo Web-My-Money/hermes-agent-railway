@@ -39,7 +39,7 @@ RUN GH_TGZ="gh_${GH_CLI_VERSION}_linux_amd64" \
 # the fork main tree had been wiped nine days earlier, and rebuilds kept restoring
 # the stale cached clone instead of failing honestly or picking up the repair.
 # Bump HERMES_AGENT_REF to take a new fork commit; that also busts the cache.
-ARG HERMES_AGENT_REF=2e00207e5098a637954000536e5fc5a2baefa8a8
+ARG HERMES_AGENT_REF=69091f6eb34b8b087fc1154c78942e7c8fa93542
 RUN git clone --recurse-submodules https://github.com/Web-My-Money/hermes-agent.git /opt/hermes-agent \
     && git -C /opt/hermes-agent checkout --quiet "${HERMES_AGENT_REF}" \
     && git -C /opt/hermes-agent submodule update --init --recursive \

@@ -9,6 +9,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
+# WMM: agent CLI tooling. G Dog runs unattended in this container and its tool
+# calls kept dying on `gh: command not found` / `railway: command not found`
+# (observed repeatedly 2026-08-27 .. 2026-08-30), so it could read code but never
+# ship a PR or inspect its own stack. Baked into the image rather than installed
+# in entrypoint.sh so boots stay fast and a network blip cannot leave the agent
+# without tools. Versions are pinned for the same reason the Hermes clone is.
+ARG GH_CLI_VERSION=2.99.0
+ARG RAILWAY_CLI_VERSION=5.48.0
+RUN GH_TGZ="gh_${GH_CLI_VERSION}_linux_amd64" \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/${GH_TGZ}.tar.gz" | tar -xz -C /tmp \
+    && mv "/tmp/${GH_TGZ}/bin/gh" /usr/local/bin/gh \
+    && rm -rf "/tmp/${GH_TGZ}" \
+    && npm install -g "@railway/cli@${RAILWAY_CLI_VERSION}" \
+    && gh --version \
+    && railway --version
+
 # WMM: build from our own fork, not upstream directly. Two reasons:
 #   1. It is the only way a WMM patch can reach production — this repo carries no
 #      Python source, so /opt/hermes-agent is whatever this clone pulls.

@@ -33,7 +33,17 @@ RUN GH_TGZ="gh_${GH_CLI_VERSION}_linux_amd64" \
 #      a rebuild moved production from 0.20.4 to 0.20.5 with no code change on
 #      our side). The fork's main only moves when WMM merges.
 # Rebase the fork on upstream deliberately; do not point this back at upstream.
-RUN git clone --recurse-submodules --branch main https://github.com/Web-My-Money/hermes-agent.git /opt/hermes-agent
+# Pinned to a commit, not a branch. Cloning `--branch main` looked reproducible but
+# was not: the layer cache keys on this instruction text, so the clone is reused
+# even when the remote branch has moved. That hid a real outage on 2026-09-02 —
+# the fork main tree had been wiped nine days earlier, and rebuilds kept restoring
+# the stale cached clone instead of failing honestly or picking up the repair.
+# Bump HERMES_AGENT_REF to take a new fork commit; that also busts the cache.
+ARG HERMES_AGENT_REF=2e00207e5098a637954000536e5fc5a2baefa8a8
+RUN git clone --recurse-submodules https://github.com/Web-My-Money/hermes-agent.git /opt/hermes-agent \
+    && git -C /opt/hermes-agent checkout --quiet "${HERMES_AGENT_REF}" \
+    && git -C /opt/hermes-agent submodule update --init --recursive \
+    && test -f /opt/hermes-agent/pyproject.toml
 
 WORKDIR /opt/hermes-agent
 RUN uv venv venv --python 3.11 \

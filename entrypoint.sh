@@ -73,6 +73,34 @@ else
   echo "infisical-cli: already installed ${INFISICAL_VERSION}"
 fi
 
+# ─── wmm-env on PATH, and a loud vault preflight ───────────────────────────────
+# Two gaps this closes.
+#   1. The clone above installs the package but never puts its bin on PATH, so an
+#      agent had to know the literal `node /tmp/wmm-credentials/bin/wmm-env.mjs`.
+#      It never did — it reached for `wmm-env` and got "command not found".
+#   2. A vault that authenticates but reads nothing is this stack's known silent
+#      failure (wmm-credentials docs/AUTO_SYNC_ROLLOUT_2026-08-26.md): Infisical
+#      prints "Injecting 0 Infisical secrets", exits 0, and the caller believes it
+#      succeeded. Counting at boot turns that into a visible WARN.
+if [ -f /tmp/wmm-credentials/bin/wmm-env.mjs ]; then
+  chmod +x /tmp/wmm-credentials/bin/wmm-env.mjs
+  ln -sf /tmp/wmm-credentials/bin/wmm-env.mjs /usr/local/bin/wmm-env
+  echo "wmm-env: linked to /usr/local/bin/wmm-env"
+else
+  echo "WARN: wmm-env missing — agents cannot inject vault secrets"
+fi
+
+if [ -z "${INFISICAL_TOKEN:-}${INFISICAL_MACHINE_IDENTITY_CLIENT_ID:-}" ]; then
+  echo "WARN: vault-preflight: no INFISICAL_TOKEN and no machine identity set - every wmm-env run will fail"
+elif command -v infisical >/dev/null 2>&1; then
+  VAULT_N="$(infisical export --projectId "${INFISICAL_PROJECT_SLUG:-wmm-hub}" --env "${INFISICAL_ENV:-dev}" --path /shared --format=dotenv 2>/dev/null | grep -cE '^[A-Za-z_][A-Za-z0-9_]*=' || true)"
+  if [ "${VAULT_N:-0}" -gt 0 ]; then
+    echo "vault-preflight: OK - ${VAULT_N} secrets readable at ${INFISICAL_ENV:-dev}:/shared"
+  else
+    echo "WARN: vault-preflight: authenticated but read 0 secrets at ${INFISICAL_ENV:-dev}:/shared - token scope is wrong"
+  fi
+fi
+
 # Register wmm-credentials-gateway in Hermes MCP config (config.yaml on volume).
 # Hermes reads mcp_servers from /root/.hermes/config.yaml directly.
 if [ -f /tmp/wmm-credentials/scripts/wmm-local-mcp.mjs ]; then

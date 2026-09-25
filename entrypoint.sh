@@ -208,6 +208,64 @@ if (changed) {
 }
 FIXEOF
 
+# ─── Shared WMM context + skills (Web-My-Money/wmm-agents) ───────────────────
+# Desktop Hermes, G Dog and the Multica agents read the same curated facts and
+# skills from one private repo instead of each machine learning the same traps on
+# its own. This mirrors it read-only into /opt/wmm-agents at boot and hourly:
+#   skills/               -> skills.external_dirs (wmm_config_patch.py below)
+#   context/INDEX.md      -> pointed at from SOUL.md (block appended below)
+#   context/hermes/*.md   -> merged into /root/.hermes/memories by wmm-agents'
+#                            own `context-sync.mjs --pull`. It backs up first and
+#                            never exceeds this install's memory limits.
+# Every piece tolerates a missing folder, so a repo that hasn't shipped context/
+# yet is picked up on the next refresh. A failed refresh keeps the last good copy.
+# Auth is the git credential helper configured at the top of this file.
+WMM_AGENTS_DIR="${WMM_AGENTS_DIR:-/opt/wmm-agents}"
+WMM_AGENTS_REF="${WMM_AGENTS_REF:-main}"
+WMM_HERMES_HOME="${HERMES_HOME:-/root/.hermes}"
+wmm_agents_refresh() {
+  if [ -d "$WMM_AGENTS_DIR/.git" ]; then
+    git -C "$WMM_AGENTS_DIR" fetch --quiet --depth 1 origin "$WMM_AGENTS_REF" \
+      && git -C "$WMM_AGENTS_DIR" reset --quiet --hard FETCH_HEAD
+  else
+    rm -rf "$WMM_AGENTS_DIR" \
+      && git clone --quiet --depth 1 --branch "$WMM_AGENTS_REF" \
+        https://github.com/Web-My-Money/wmm-agents.git "$WMM_AGENTS_DIR"
+  fi || { echo "WARN: wmm-agents: refresh failed - keeping the previous copy, if any"; return 1; }
+  echo "wmm-agents: $(git -C "$WMM_AGENTS_DIR" log -1 --format='%h %cs') skills=$(find "$WMM_AGENTS_DIR/skills" -name SKILL.md 2>/dev/null | wc -l) context=$([ -f "$WMM_AGENTS_DIR/context/INDEX.md" ] && echo yes || echo not-yet)"
+  if [ -f "$WMM_AGENTS_DIR/scripts/context-sync.mjs" ] && [ -d "$WMM_AGENTS_DIR/context/hermes" ]; then
+    # Summary lines only: an "omitted" line quotes the start of a local memory entry.
+    node "$WMM_AGENTS_DIR/scripts/context-sync.mjs" --pull \
+      --hermes-dir "$WMM_HERMES_HOME/memories" --config "$WMM_HERMES_HOME/config.yaml" 2>&1 \
+      | grep -v 'omitted (still in backup)' | sed 's/^/wmm-agents: memory: /'
+  fi
+}
+wmm_agents_refresh || true
+
+SOUL_FILE="$WMM_HERMES_HOME/SOUL.md"
+if [ -f "$SOUL_FILE" ] && ! grep -q 'wmm-shared-context' "$SOUL_FILE"; then
+  cat >> "$SOUL_FILE" <<'SOULEOF'
+
+<!-- wmm-shared-context: appended once by hermes-agent-railway/entrypoint.sh -->
+## Shared WMM facts
+Curated, secret-scanned facts that every WMM agent shares (Claude Code, Hermes desktop, Multica) live
+in `/opt/wmm-agents/context/`, refreshed hourly from `Web-My-Money/wmm-agents`. Read
+`context/INDEX.md` before exploring a topic, then open only the `context/facts/<slug>.md` you need.
+Shared skills load from `/opt/wmm-agents/skills`. To add or correct a fact, open a PR on wmm-agents
+(never push to main).
+SOULEOF
+  echo "wmm-agents: pointer appended to SOUL.md"
+fi
+
+# WMM-managed config keys (shared skills dir, Telegram pairing, a fallback that is
+# not the primary again). Runs now because Hermes rewrites config.yaml itself once
+# it is up; see wmm_config_patch.py for each rule.
+python /wmm_config_patch.py || echo "WARN: wmm-config: patch failed (non-fatal)"
+
+# Hourly refresh. A plain loop rather than a Hermes cron job: it needs no model,
+# and must keep working when the model gateway is down.
+( while sleep "${WMM_AGENTS_REFRESH_SECONDS:-3600}"; do wmm_agents_refresh || true; done ) &
+
 hermes dashboard --host 127.0.0.1 --port 9119 --no-open &
 
 exec python /auth_proxy.py

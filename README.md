@@ -61,6 +61,23 @@ Internet -> Railway -> Auth Proxy (cookie login) -> Hermes Dashboard (port 9119)
 - [GitHub Repository](https://github.com/NousResearch/hermes-agent)
 - [Web Dashboard Guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
 
+## How a teammate gets access to G Dog
+
+1. The teammate DMs the bot on Telegram. G Dog replies with an 8-character pairing code (valid 1 hour), and they send that code to Fran.
+2. Fran approves it one of two ways. He can open the dashboard (`PUBLIC_URL`, the `DASHBOARD_PASSWORD` login), go to **Pairing**, and click approve. Or he can tell G Dog in his own chat: `run: hermes pairing approve telegram <CODE>`.
+3. The teammate messages again, and they're in. No restart is needed. To remove access: `hermes pairing revoke telegram <user_id>`. `hermes pairing list` shows who is approved.
+
+An approved teammate gets the same G Dog as Fran: the same tools, repo access and vault reach. Approve only people who should have that. `wmm_config_patch.py` turns pairing on (`platforms.telegram.unauthorized_dm_behavior: pair`). Set it to `ignore` in the dashboard to close the door again, and the boot patch will leave that choice alone.
+
+## WMM boot additions (entrypoint.sh)
+
+| What | Where | Knobs |
+|---|---|---|
+| Shared WMM facts and skills: `Web-My-Money/wmm-agents` mirrored read-only at boot and hourly | `/opt/wmm-agents`: `skills/` is added to `skills.external_dirs`, `context/INDEX.md` is referenced from `SOUL.md`, and `context/hermes/*.md` is merged into `memories/` by wmm-agents' `context-sync.mjs --pull` | `WMM_AGENTS_REF` (default `main`), `WMM_AGENTS_REFRESH_SECONDS` (default `3600`) |
+| WMM-managed config keys, applied before Hermes starts. Each one only fills a gap, and a timestamped `config.yaml.bak-wmm-config-*` is written when anything changes | `wmm_config_patch.py` | `HERMES_WMM_FALLBACK_MODEL` (default `xai-oauth/grok-4.5`, used when the fallback chain only repeats the primary model) |
+
+The Hermes version is `HERMES_AGENT_REF` in the `Dockerfile`: a commit on `Web-My-Money/hermes-agent` `main`, which is upstream's release plus the WMM patches. Bump it by PR, and merging deploys it.
+
 ## WMM fork
 
 This is `Web-My-Money`'s fork of [`mazshakibaii/hermes-agent-railway`](https://github.com/mazshakibaii/hermes-agent-railway), forked 2026-08-09 to fix a bug the upstream template can't fix via Railway config alone: nothing in `entrypoint.sh` configured a git credential helper, so git operations issued from Hermes's terminal-tool sandbox failed with `fatal: could not read Username for 'https://github.com'` even though `GH_TOKEN` was set correctly on the Railway service.

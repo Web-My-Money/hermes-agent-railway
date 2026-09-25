@@ -25,13 +25,27 @@ if [ -n "$GH_TOKEN" ]; then
   # and it does not weaken the blocklist, which still keeps it out of env.
   # /root/.config is not on the volume, so this has to run on every boot.
   # `gh auth login --with-token` refuses while GH_TOKEN is set, hence env -u.
+  #
+  # Retried: this is the FIRST network call in the entrypoint, and on the
+  # first boot with it (2026-09-25) it failed while the same commands run by
+  # hand a minute later succeeded -- consistent with container networking not
+  # being up yet. The error is kept, not sent to /dev/null: the first version
+  # discarded it, which is why the cause had to be inferred. gh's error text
+  # never contains the token.
   if command -v gh >/dev/null 2>&1; then
-    if printf '%s' "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN \
-         gh auth login --with-token --hostname github.com >/dev/null 2>&1 \
-       && env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git >/dev/null 2>&1; then
-      echo "gh-auth-bootstrap: configured"
+    GH_BOOT_OK=""
+    for GH_TRY in 1 2 3 4 5 6; do
+      if GH_ERR=$(printf '%s' "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN \
+             gh auth login --with-token --hostname github.com 2>&1) \
+         && GH_ERR=$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git 2>&1); then
+        GH_BOOT_OK=1; break
+      fi
+      sleep $((GH_TRY * 2))
+    done
+    if [ -n "$GH_BOOT_OK" ]; then
+      echo "gh-auth-bootstrap: configured (attempt $GH_TRY)"
     else
-      echo "WARN: gh-auth-bootstrap: gh login failed - the agent's gh will be logged out"
+      echo "WARN: gh-auth-bootstrap: gh login failed after $GH_TRY attempts - the agent's gh will be logged out: $(printf '%s' "$GH_ERR" | head -c 300)"
     fi
   fi
 else

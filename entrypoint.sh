@@ -20,32 +20,31 @@ if [ -n "$GH_TOKEN" ]; then
   # did nothing for the agent: `gh` was logged out, and G Dog answered
   # "You are not logged into any GitHub hosts" (seen 2026-09-25).
   #
-  # Log gh in through its OWN store instead, the way a developer machine is.
-  # This exposes nothing new — the same token is already on disk one line up —
-  # and it does not weaken the blocklist, which still keeps it out of env.
-  # /root/.config is not on the volume, so this has to run on every boot.
-  # `gh auth login --with-token` refuses while GH_TOKEN is set, hence env -u.
+  # Write gh's OWN store directly (/root/.config/gh/hosts.yml), the way gh
+  # itself does when there is no keyring. NOT `gh auth login --with-token`:
+  # that validator refuses this token -- "error validating token: missing
+  # required scope 'read:org'" (boot log 2026-09-25). The service's GH_TOKEN is
+  # an OAuth token scoped gist, repo, workflow (verified via X-OAuth-Scopes),
+  # which covers everything the agent does with gh -- pr, api repos/..., repo
+  # clone, workflow. read:org only gates org/team listing, and only the login
+  # validator insists on it; gh does not re-check scopes when it reads hosts.yml.
   #
-  # Retried: this is the FIRST network call in the entrypoint, and on the
-  # first boot with it (2026-09-25) it failed while the same commands run by
-  # hand a minute later succeeded -- consistent with container networking not
-  # being up yet. The error is kept, not sent to /dev/null: the first version
-  # discarded it, which is why the cause had to be inferred. gh's error text
-  # never contains the token.
+  # (#9 guessed at a network race. It was not: keeping the error instead of
+  # sending it to /dev/null is what surfaced the real cause.)
+  #
+  # Exposes nothing new -- the same token is on disk one line up -- and it does
+  # not weaken the blocklist, which still keeps the token out of subprocess env.
+  # /root/.config is not on the volume, so this runs every boot.
   if command -v gh >/dev/null 2>&1; then
-    GH_BOOT_OK=""
-    for GH_TRY in 1 2 3 4 5 6; do
-      if GH_ERR=$(printf '%s' "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN \
-             gh auth login --with-token --hostname github.com 2>&1) \
-         && GH_ERR=$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git 2>&1); then
-        GH_BOOT_OK=1; break
-      fi
-      sleep $((GH_TRY * 2))
-    done
-    if [ -n "$GH_BOOT_OK" ]; then
-      echo "gh-auth-bootstrap: configured (attempt $GH_TRY)"
+    GH_LOGIN=$(curl -fsS --max-time 15 --retry 3 -H "Authorization: token $GH_TOKEN" \
+      https://api.github.com/user 2>/dev/null | sed -n 's/.*"login": *"\([^"]*\)".*/\1/p' | head -1)
+    ( umask 077; mkdir -p /root/.config/gh
+      printf 'github.com:\n    oauth_token: %s\n    user: %s\n    git_protocol: https\n' \
+        "$GH_TOKEN" "${GH_LOGIN:-x-access-token}" > /root/.config/gh/hosts.yml )
+    if GH_ERR=$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user --jq .login 2>&1); then
+      echo "gh-auth-bootstrap: configured (${GH_ERR})"
     else
-      echo "WARN: gh-auth-bootstrap: gh login failed after $GH_TRY attempts - the agent's gh will be logged out: $(printf '%s' "$GH_ERR" | head -c 300)"
+      echo "WARN: gh-auth-bootstrap: hosts.yml written but gh cannot authenticate - the agent's gh will be logged out: $(printf '%s' "$GH_ERR" | head -c 300)"
     fi
   fi
 else

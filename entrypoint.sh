@@ -12,6 +12,28 @@ if [ -n "$GH_TOKEN" ]; then
   printf 'https://x-access-token:%s@github.com\n' "$GH_TOKEN" > /root/.git-credentials
   chmod 600 /root/.git-credentials
   echo "git-credential-bootstrap: configured"
+
+  # `gh` does not read .git-credentials, and the terminal tool scrubs GH_TOKEN
+  # from its subprocess env: it is on Hermes's _HERMES_PROVIDER_ENV_BLOCKLIST
+  # (tools/environments/local.py), and terminal.env_passthrough deliberately
+  # refuses blocklisted names (GHSA-rhgp-j443-p4rf). So GH_TOKEN being set here
+  # did nothing for the agent: `gh` was logged out, and G Dog answered
+  # "You are not logged into any GitHub hosts" (seen 2026-09-25).
+  #
+  # Log gh in through its OWN store instead, the way a developer machine is.
+  # This exposes nothing new — the same token is already on disk one line up —
+  # and it does not weaken the blocklist, which still keeps it out of env.
+  # /root/.config is not on the volume, so this has to run on every boot.
+  # `gh auth login --with-token` refuses while GH_TOKEN is set, hence env -u.
+  if command -v gh >/dev/null 2>&1; then
+    if printf '%s' "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN \
+         gh auth login --with-token --hostname github.com >/dev/null 2>&1 \
+       && env -u GH_TOKEN -u GITHUB_TOKEN gh auth setup-git >/dev/null 2>&1; then
+      echo "gh-auth-bootstrap: configured"
+    else
+      echo "WARN: gh-auth-bootstrap: gh login failed - the agent's gh will be logged out"
+    fi
+  fi
 else
   echo "git-credential-bootstrap: skipped (GH_TOKEN not set)"
 fi

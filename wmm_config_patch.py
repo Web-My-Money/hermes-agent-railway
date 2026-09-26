@@ -18,6 +18,18 @@ the dashboard sticks:
    repeats the primary model, the chain is replaced with HERMES_WMM_FALLBACK_MODEL on
    the same custom provider. That is a different model family on the same gateway;
    there is no second gateway to use.
+4. Team access guard (fork patch Web-My-Money/hermes-agent#7). Fran
+   (HERMES_OWNER_TELEGRAM_ID, default 8635020128) is the Telegram admin
+   (platforms.telegram.allow_admin_from); everyone else who pairs is a teammate:
+   - teammates may run only TEAM_SLASH_COMMANDS (no /approve, /yolo, /approvals,
+     /config, /model, /restart, /update ...);
+   - approvals.non_admin_mode: manual — a teammate's dangerous command needs approval,
+     and approvals.non_admin_approver_chat sends that approval card to Fran's DM, so
+     Fran decides, not the teammate. Fran's own mode (approvals.mode) is unchanged;
+   - approvals.non_admin_deny blocks teammates outright from pairing (approving
+     someone else), the allowlist, the config file and the secret-bearing quarantine.
+   Each key is only filled when missing or empty. To turn the guard off, set
+   approvals.non_admin_mode to "off" (any non-empty value is left alone).
 """
 import json
 import os
@@ -32,6 +44,13 @@ CONFIG = os.path.join(HOME, "config.yaml")
 HERMES = os.environ.get("HERMES_BIN", "hermes")
 SKILLS_DIR = os.environ.get("WMM_AGENTS_SKILLS_DIR", "/opt/wmm-agents/skills")
 FALLBACK_MODEL = os.environ.get("HERMES_WMM_FALLBACK_MODEL", "xai-oauth/grok-4.5")
+OWNER_TELEGRAM_ID = os.environ.get("HERMES_OWNER_TELEGRAM_ID", "8635020128").strip()
+# Session-local, non-destructive commands a paired teammate may use.
+TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "title",
+                       "queue", "steer", "btw", "usage", "context"]
+# fnmatch globs (case-insensitive) matched against teammates' terminal commands only.
+TEAM_DENY = ["*pairing*", "*TELEGRAM_ALLOWED_USERS*", "*allow_admin_from*", "*config.yaml*",
+             "*hermes config*", "*non_admin_*", "*secret-bearing*", "*/.hermes/secrets*"]
 
 
 _backed_up = False
@@ -70,6 +89,19 @@ def main():
     if primary and chain and all(str((e or {}).get("model") or "") == primary for e in chain):
         provider = (chain[0] or {}).get("provider") or model.get("provider")
         setk("fallback_providers", [{"provider": provider, "model": FALLBACK_MODEL}])
+
+    if OWNER_TELEGRAM_ID:
+        if not telegram.get("allow_admin_from"):
+            setk("platforms.telegram.allow_admin_from", [OWNER_TELEGRAM_ID])
+        if not telegram.get("user_allowed_commands"):
+            setk("platforms.telegram.user_allowed_commands", TEAM_SLASH_COMMANDS)
+        approvals = cfg.get("approvals") or {}
+        if not approvals.get("non_admin_mode"):
+            setk("approvals.non_admin_mode", "manual")
+        if not approvals.get("non_admin_deny"):
+            setk("approvals.non_admin_deny", TEAM_DENY)
+        if not approvals.get("non_admin_approver_chat"):
+            setk("approvals.non_admin_approver_chat", {"telegram": OWNER_TELEGRAM_ID})
 
     print("wmm-config: checked")
 

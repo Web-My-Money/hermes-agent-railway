@@ -223,6 +223,11 @@ FIXEOF
 WMM_AGENTS_DIR="${WMM_AGENTS_DIR:-/opt/wmm-agents}"
 WMM_AGENTS_REF="${WMM_AGENTS_REF:-main}"
 WMM_HERMES_HOME="${HERMES_HOME:-/root/.hermes}"
+# Owner-only quarantine for secret-bearing backups (old MEMORY.md copies, state.db and
+# config backups, tarballs). The Hermes fork read-denies it for the agent's file tools
+# and teammates' commands that name it are denied (approvals.non_admin_deny).
+WMM_SECRET_BACKUPS="$WMM_HERMES_HOME/backups/secret-bearing"
+mkdir -p "$WMM_SECRET_BACKUPS/context-sync" && chmod 700 "$WMM_HERMES_HOME/backups" "$WMM_SECRET_BACKUPS" || true
 wmm_agents_refresh() {
   if [ -d "$WMM_AGENTS_DIR/.git" ]; then
     git -C "$WMM_AGENTS_DIR" fetch --quiet --depth 1 origin "$WMM_AGENTS_REF" \
@@ -236,7 +241,8 @@ wmm_agents_refresh() {
   if [ -f "$WMM_AGENTS_DIR/scripts/context-sync.mjs" ] && [ -d "$WMM_AGENTS_DIR/context/hermes" ]; then
     # Summary lines only: an "omitted" line quotes the start of a local memory entry.
     node "$WMM_AGENTS_DIR/scripts/context-sync.mjs" --pull \
-      --hermes-dir "$WMM_HERMES_HOME/memories" --config "$WMM_HERMES_HOME/config.yaml" 2>&1 \
+      --hermes-dir "$WMM_HERMES_HOME/memories" --config "$WMM_HERMES_HOME/config.yaml" \
+      --backup-dir "$WMM_SECRET_BACKUPS/context-sync" 2>&1 \
       | grep -v 'omitted (still in backup)' | sed 's/^/wmm-agents: memory: /'
   fi
 }

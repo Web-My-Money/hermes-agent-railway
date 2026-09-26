@@ -67,7 +67,17 @@ Internet -> Railway -> Auth Proxy (cookie login) -> Hermes Dashboard (port 9119)
 2. Fran approves it one of two ways. He can open the dashboard (`PUBLIC_URL`, the `DASHBOARD_PASSWORD` login), go to **Pairing**, and click approve. Or he can tell G Dog in his own chat: `run: hermes pairing approve telegram <CODE>`.
 3. The teammate messages again, and they're in. No restart is needed. To remove access: `hermes pairing revoke telegram <user_id>`. `hermes pairing list` shows who is approved.
 
-An approved teammate gets the same G Dog as Fran: the same tools, repo access and vault reach. Approve only people who should have that. `wmm_config_patch.py` turns pairing on (`platforms.telegram.unauthorized_dm_behavior: pair`). Set it to `ignore` in the dashboard to close the door again, and the boot patch will leave that choice alone.
+`wmm_config_patch.py` turns pairing on (`platforms.telegram.unauthorized_dm_behavior: pair`). Set it to `ignore` in the dashboard to close the door again, and the boot patch will leave that choice alone.
+
+**Owner vs teammate (since 2026-09-26, fork patch `Web-My-Money/hermes-agent#7`).** Fran (`HERMES_OWNER_TELEGRAM_ID`, default `8635020128`) is the only Telegram admin (`platforms.telegram.allow_admin_from`). A paired teammate:
+
+- can use only session commands (`/new /stop /retry /undo /status /compress /title /queue /steer /btw /usage /context`), not `/approve`, `/yolo`, `/approvals`, `/config`, `/model`, `/restart`, `/update`;
+- runs with `approvals.non_admin_mode: manual`. When a teammate's request hits a dangerous command, the approval card goes to **Fran's DM** (`approvals.non_admin_approver_chat`) and says who asked; the teammate sees "needs the owner's approval". No answer in 5 minutes = denied. Fran's own session keeps `approvals.mode` (off);
+- is blocked outright (`approvals.non_admin_deny`) from commands that mention pairing, the allowlist, `config.yaml`/`hermes config`, or the secret-bearing quarantine. Only Fran can approve a new teammate.
+
+This is a guard rail, not a sandbox: a teammate's G Dog still has the same terminal, repos and vault reach, and a command the dangerous-pattern detector doesn't flag runs without asking. Approve only people you would trust with that. To turn the guard off: `hermes config set approvals.non_admin_mode off`.
+
+**Secret-bearing backups** live in `/root/.hermes/backups/secret-bearing/` (chmod 700, README inside). The Hermes fork read-denies that path for the agent's file tools; the hourly context sync writes its pre-redaction memory backups there (`--backup-dir`).
 
 ## WMM boot additions (entrypoint.sh)
 

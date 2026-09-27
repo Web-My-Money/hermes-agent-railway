@@ -61,6 +61,7 @@ COPY wmm_config_patch.py /wmm_config_patch.py
 # WMM plugins, versioned here. /root/.hermes is the volume mount, so they are staged in
 # the image and copied into $HERMES_HOME/plugins by entrypoint.sh on every boot.
 COPY plugins/ /opt/wmm-gdog/plugins/
+COPY soul/ /opt/wmm-gdog/soul/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

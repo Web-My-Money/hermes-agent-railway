@@ -278,6 +278,27 @@ if [ -d /opt/wmm-gdog/plugins ]; then
 fi
 [ -n "${CONTENT_CAPTURE_SECRET:-}" ] || echo "WARN: idea-capture: CONTENT_CAPTURE_SECRET is not set - capture_idea will refuse every idea"
 
+# capture_idea is a plugin tool, and Hermes defers every plugin tool behind the
+# tool_search bridge (tools/tool_search.py). Left alone the model would spend a
+# tool_describe round-trip before each capture. This SOUL.md block names the exact
+# tool_call shape so an idea is one call. Rewritten every boot between its markers,
+# so soul/idea-capture.md in this repo is the source of truth.
+if [ -f "$SOUL_FILE" ] && [ -f /opt/wmm-gdog/soul/idea-capture.md ]; then
+  python3 - "$SOUL_FILE" /opt/wmm-gdog/soul/idea-capture.md <<'PYEOF' || echo "WARN: idea-capture: SOUL.md block not written"
+import re, sys
+soul, block = sys.argv[1], open(sys.argv[2], encoding="utf-8").read().strip()
+b, e = "<!-- wmm-idea-capture:begin -->", "<!-- wmm-idea-capture:end -->"
+text = open(soul, encoding="utf-8").read()
+text = re.sub(r"\n*" + re.escape(b) + r".*?" + re.escape(e) + r"\n?", "\n", text, flags=re.S).rstrip("\n")
+new = text + "\n\n" + b + "\n" + block + "\n" + e + "\n"
+if new != open(soul, encoding="utf-8").read():
+    open(soul, "w", encoding="utf-8").write(new)
+    print("idea-capture: SOUL.md block written")
+else:
+    print("idea-capture: SOUL.md block up to date")
+PYEOF
+fi
+
 # WMM-managed config keys (shared skills dir, Telegram pairing, a fallback that is
 # not the primary again). Runs now because Hermes rewrites config.yaml itself once
 # it is up; see wmm_config_patch.py for each rule.

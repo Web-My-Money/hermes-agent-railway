@@ -53,6 +53,15 @@ the dashboard sticks:
    G Dog answered nothing. The ref is replaced with the env value (a URL, not a secret),
    and any credential_pool entry holding an unresolved base_url is dropped so Hermes
    re-seeds it from the fixed config.
+8. Every env var that config.yaml references as `${VAR}` / `${env:VAR}` is present in
+   $HERMES_HOME/.env. The Telegram gateway runs multiplexed: inside a turn Hermes resolves
+   refs ONLY from the profile's .env (agent/secret_scope.get_secret returns the default on a
+   miss — it never falls back to os.environ), so a ref backed only by a Railway variable
+   stays literal. On 2026-09-27 that sent `${MODEL_API_KEY}` verbatim as the bearer token →
+   OmniRoute `401 AUTH_002 Invalid API key` on every model, while `hermes -z` (unscoped,
+   reads os.environ) kept passing — a oneshot is NOT proof the gateway works. Values are
+   upserted from the process env (Railway stays the source of truth: a changed Railway value
+   overwrites the .env copy on the next boot); vars not set in the env are left alone.
 """
 import json
 import os
@@ -134,6 +143,47 @@ def _drop_unresolved_pool_entries():
     os.chmod(path, 0o600)
 
 
+def _sync_env_refs_to_dotenv():
+    """Rule 8: copy each `${VAR}` config.yaml references from os.environ into $HERMES_HOME/.env."""
+    with open(CONFIG, encoding="utf-8") as f:
+        text = f.read()
+    names = set()
+    for body in re.findall(r"\$\{([^}]+)\}", text):
+        body = body.strip()
+        name = body[len("env:"):].strip() if body.startswith("env:") else body
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            names.add(name)
+    names.add("MODEL_API_URL")
+    path = os.path.join(HOME, ".env")
+    lines = []
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    index = {l.split("=", 1)[0].strip(): i for i, l in enumerate(lines)
+             if "=" in l and not l.lstrip().startswith("#")}
+    changed = []
+    for name in sorted(names):
+        value = os.environ.get(name)
+        if not value or "\n" in value:
+            continue
+        line = f"{name}={value}"
+        if name in index:
+            if lines[index[name]] != line:
+                lines[index[name]] = line
+                changed.append(name)
+        else:
+            lines.append(line)
+            changed.append(name)
+    if not changed:
+        return
+    if os.path.isfile(path):
+        shutil.copy2(path, f"{path}.bak-wmm-config-{time.strftime('%Y%m%d_%H%M%S')}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+    print(f"wmm-config: synced to .env: {', '.join(changed)}")
+
+
 def main():
     with open(CONFIG, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
@@ -205,6 +255,7 @@ def main():
     if changed:
         setk("custom_providers", fixed)
     _drop_unresolved_pool_entries()
+    _sync_env_refs_to_dotenv()
 
     print("wmm-config: checked")
 

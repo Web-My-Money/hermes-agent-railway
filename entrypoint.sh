@@ -125,6 +125,23 @@ else
   echo "WARN: wmm-env missing — agents cannot inject vault secrets"
 fi
 
+# ─── Machine-identity token exchange + /ops export ─────────────────────────
+# Hermes's own long-running process (not just ad-hoc wmm-env calls) gets the
+# vault's /ops operator credentials directly in ITS environment, exchanged from
+# the machine identity Railway injects (INFISICAL_MACHINE_IDENTITY_CLIENT_ID/
+# _SECRET) rather than the legacy INFISICAL_TOKEN service token this replaces.
+# `eval`d into this script's own shell so `exec python /auth_proxy.py` below
+# inherits it — no separate export step needed.
+if [ -f /tmp/wmm-credentials/bin/wmm-ops-load.mjs ] && [ -n "${INFISICAL_MACHINE_IDENTITY_CLIENT_ID:-}" ]; then
+  WMM_OPS_EXPORTS="$(node /tmp/wmm-credentials/bin/wmm-ops-load.mjs --shell bash 2>/tmp/wmm-ops-load.log)"
+  if [ -n "$WMM_OPS_EXPORTS" ]; then
+    eval "$WMM_OPS_EXPORTS"
+    echo "wmm-ops: exported $(printf '%s\n' "$WMM_OPS_EXPORTS" | grep -c '^export ') /ops secret(s) into this process"
+  else
+    echo "WARN: wmm-ops: no /ops secrets exported ($(tail -c 300 /tmp/wmm-ops-load.log 2>/dev/null))"
+  fi
+fi
+
 if [ -z "${INFISICAL_TOKEN:-}${INFISICAL_MACHINE_IDENTITY_CLIENT_ID:-}" ]; then
   echo "WARN: vault-preflight: no INFISICAL_TOKEN and no machine identity set - every wmm-env run will fail"
 elif command -v infisical >/dev/null 2>&1; then

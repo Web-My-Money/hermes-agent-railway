@@ -46,9 +46,17 @@ the dashboard sticks:
      verbatim tail; "lean" keeps a 10K minimum tail that cannot fit under the ceiling on
      top of the floor), and protect_first_n 0 (the first messages of a weeks-old chat
      are not worth pinning).
+7. No custom provider's base_url is an unresolved `${VAR}`. Hermes 0.21.5 expands
+   `${VAR}` in api_key but NOT in custom_providers[].base_url, and it seeds that literal
+   into auth.json's credential_pool. On 2026-09-27 `base_url: ${MODEL_API_URL}` made the
+   primary AND both fallbacks (all on custom:Omniroute) fail with "Connection error", so
+   G Dog answered nothing. The ref is replaced with the env value (a URL, not a secret),
+   and any credential_pool entry holding an unresolved base_url is dropped so Hermes
+   re-seeds it from the fixed config.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -95,6 +103,35 @@ def _int_or_none(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+UNRESOLVED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def _resolve_env_refs(value):
+    """`${VAR}` -> os.environ[VAR]; an unset VAR is left as-is so the caller can see it."""
+    return UNRESOLVED.sub(lambda m: os.environ.get(m.group(0)[2:-1], m.group(0)), value)
+
+
+def _drop_unresolved_pool_entries():
+    """auth.json credential_pool entries whose base_url is a literal `${VAR}` never connect."""
+    path = os.path.join(HOME, "auth.json")
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        auth = json.load(f)
+    pool = auth.get("credential_pool") or {}
+    bad = [name for name, entries in pool.items()
+           if any(UNRESOLVED.search(str((e or {}).get("base_url") or "")) for e in (entries or []))]
+    if not bad:
+        return
+    shutil.copy2(path, f"{path}.bak-wmm-config-{time.strftime('%Y%m%d_%H%M%S')}")
+    for name in bad:
+        pool.pop(name, None)
+        print(f"wmm-config: dropped credential_pool[{name}] (unresolved base_url)")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(auth, f, indent=2)
+    os.chmod(path, 0o600)
 
 
 def main():
@@ -151,6 +188,23 @@ def main():
         setk("compression.target_ratio", 0.10)
     if "protect_first_n" not in comp:
         setk("compression.protect_first_n", 0)
+
+    providers = cfg.get("custom_providers") or []
+    fixed, changed = [], False
+    for entry in providers:
+        entry = dict(entry or {})
+        url = str(entry.get("base_url") or "")
+        resolved = _resolve_env_refs(url)
+        if resolved != url:
+            if UNRESOLVED.search(resolved):
+                print(f"WARN: wmm-config: custom provider base_url {url!r} references an unset env var")
+            else:
+                entry["base_url"] = resolved
+                changed = True
+        fixed.append(entry)
+    if changed:
+        setk("custom_providers", fixed)
+    _drop_unresolved_pool_entries()
 
     print("wmm-config: checked")
 

@@ -1,0 +1,6 @@
+name: wmm-idea-capture
+version: "1.0.0"
+description: "Save an idea Fran marks in chat (text, voice-note transcript, or a note shared from Keep / iPhone Notes) to the Creator Studio inbox (wmm-content ct_notes) with one HTTP POST."
+author: "Web My Money"
+provides_tools:
+  - capture_idea

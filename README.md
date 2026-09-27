@@ -118,3 +118,30 @@ The `hermes` service on Railway (project `Cloud-Agents-Stack`) is configured to 
 
 Only reach for a manual Docker image push if you need to bypass Railway's build entirely (e.g. testing a build environment Railway's builder can't reproduce) — for normal fixes, pushing to this repo is the whole deploy step.
 # Trigger Railway rebuild
+
+## Idea capture (G Dog → Creator Studio)
+
+When Fran marks a message as an idea — it starts with `idea`, `idea:`, `/idea` or `💡`, or he says "guarda esto como idea" / "save this as an idea", including a voice note (Hermes transcribes it) or a note shared from Google Keep / iPhone Notes — G Dog calls the `capture_idea` tool once. The tool POSTs `{"text": "<idea verbatim>"}` to `CONTENT_CAPTURE_URL` (`https://wmm-content.vercel.app/api/capture/telegram`) with `Authorization: Bearer $CONTENT_CAPTURE_SECRET`, and the idea lands in `ct_notes` with `source = telegram`. G Dog then confirms in one line in Fran's language. If the POST fails, the tool returns `saved: false` with the HTTP status and G Dog says it was not saved.
+
+- Code: `plugins/wmm-idea-capture/` (a Hermes plugin tool). The Dockerfile stages it at `/opt/wmm-gdog/plugins`, `entrypoint.sh` copies it into `$HERMES_HOME/plugins` on every boot, and `wmm_config_patch.py` adds it to `plugins.enabled`. To turn it off, add `wmm-idea-capture` to `plugins.disabled`.
+- Why a plugin tool and not a skill: one tool call per idea, no `skill_view` round-trip, and the secret is read from the gateway's own env. The terminal tool scrubs a blocklist of env names, so a `curl` skill would depend on that list.
+- Owner only: on a messaging platform the tool refuses anyone whose user id is not `HERMES_OWNER_TELEGRAM_ID` (Fran), because the ideas go to Fran's inbox.
+- Railway variables on `hermes`: `CONTENT_CAPTURE_URL`, `CONTENT_CAPTURE_SECRET` (the same value as wmm-content's capture secret). Boot logs `WARN: idea-capture: ...` if the secret is missing.
+
+## Context compression under OmniRoute's heavy line
+
+OmniRoute treats a chat estimated at 32,000 tokens or more as "heavy" and runs only 4 at once, shared with the Multica agents and crons. Long Telegram threads were getting `503 chat_admission_busy` and G Dog answered "provider failed after retries". The fix is on the Hermes side; OmniRoute limits are unchanged.
+
+`wmm_config_patch.py` rule 6 sets, at boot:
+
+| key | before (2026-09-26) | after |
+|---|---|---|
+| `compression.threshold_tokens` | `100000` | `28000` (a ceiling; `HERMES_WMM_COMPRESSION_MAX_TOKENS`) |
+| `compression.proactive_prune_tokens` | `60000` | `24000` (a ceiling; `HERMES_WMM_PRUNE_MAX_TOKENS`) |
+| `compression.tail_mode` | unset (`lean`) | `legacy` |
+| `compression.target_ratio` | unset (`0.20`) | `0.10` |
+| `compression.protect_first_n` | unset (`3`) | `0` |
+
+Unchanged: `threshold 0.55`, `protect_last_n 20`, `micro_compact true`, `abort_on_summary_failure true`, `model.context_length 200000`.
+
+The budget is tight. G Dog's fixed floor, sent on every request before any conversation, is about 20-23K tokens: a ~46K-character system prompt (the skills index alone is ~14.6K characters, memory ~13.4K) plus ~44K characters of tool schemas (25 tools). A 2-message oneshot measured 20,009 real input tokens. That leaves roughly 5-8K tokens of conversation before a compaction. `lean` mode keeps a 10K-token tail minimum, which cannot fit, so the tail is `legacy` at 10% of the threshold (~2.8K tokens). If compaction cannot get the real prompt under the threshold twice in a row, Hermes' own anti-thrash breaker pauses auto-compaction for 5 minutes (log line "Compaction did not clear the threshold"). If that shows up, the next lever is the floor (skills index, memory, tool set), not this threshold.

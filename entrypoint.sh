@@ -263,6 +263,21 @@ SOULEOF
   echo "wmm-agents: pointer appended to SOUL.md"
 fi
 
+# WMM plugins (this repo's plugins/, staged at /opt/wmm-gdog/plugins by the Dockerfile).
+# Copied over the volume's copy every boot so this repo stays the source of truth;
+# wmm_config_patch.py adds each one to plugins.enabled. Currently: wmm-idea-capture
+# (the capture_idea tool -> Creator Studio inbox).
+if [ -d /opt/wmm-gdog/plugins ]; then
+  mkdir -p "$WMM_HERMES_HOME/plugins"
+  for p in /opt/wmm-gdog/plugins/*/; do
+    [ -f "$p/plugin.yaml" ] || continue
+    name="$(basename "$p")"
+    rm -rf "$WMM_HERMES_HOME/plugins/$name" && cp -r "$p" "$WMM_HERMES_HOME/plugins/$name" \
+      && echo "wmm-plugins: installed $name" || echo "WARN: wmm-plugins: could not install $name"
+  done
+fi
+[ -n "${CONTENT_CAPTURE_SECRET:-}" ] || echo "WARN: idea-capture: CONTENT_CAPTURE_SECRET is not set - capture_idea will refuse every idea"
+
 # WMM-managed config keys (shared skills dir, Telegram pairing, a fallback that is
 # not the primary again). Runs now because Hermes rewrites config.yaml itself once
 # it is up; see wmm_config_patch.py for each rule.

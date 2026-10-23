@@ -54,10 +54,25 @@ fi
 # ─── Runtime pip dependencies (previously in Railway startCommand override) ──
 # These are needed for the Telegram webhook server and were previously installed
 # via an inline startCommand that bypassed this entrypoint.
+#
+# `ddgs` is the keyless DuckDuckGo web-search backend. Without it G Dog had NO
+# usable search provider: `[all]` deliberately excludes opt-in backends (they
+# lazy-install at first use) and every web_search call fell through to the
+# anonymous keyless ring (plugins/web/keyless_mcp.py), whose own comment calls it
+# a "strictly last resort" (unauthenticated public free tiers, rate-limited by
+# strangers). plugins/web/ddgs/plugin.yaml at the pinned HERMES_AGENT_REF says
+# exactly what to do: "Install with `pip install ddgs`". It is a 47 KB
+# pure-Python wheel with no credential and no service to run. The preference walk
+# in agent/web_search_registry.py still picks a credentialed provider (firecrawl
+# / parallel / tavily / perplexity / exa / searxng) first, so this only upgrades
+# the no-credential case from "last resort" to "works" — adding a search key to
+# the vault's /ops path takes precedence automatically. Version matches the pin
+# upstream adopted for this backend.
 if command -v uv >/dev/null 2>&1; then
   VIRTUAL_ENV=/opt/hermes-agent/venv uv pip install \
     "python-telegram-bot[webhooks]==22.8" \
-    "aiohttp==3.14.3" --quiet 2>/dev/null || echo "WARN: pip deps install failed (non-fatal)"
+    "aiohttp==3.14.3" \
+    "ddgs==9.16.0" --quiet 2>/dev/null || echo "WARN: pip deps install failed (non-fatal)"
 fi
 
 AUTO_UPDATE="${AUTO_UPDATE:-true}"

@@ -15,6 +15,7 @@ import time
 from contextlib import suppress
 
 from aiohttp import web, ClientError, ClientSession, WSMsgType
+from multidict import CIMultiDict
 
 HERMES_HOME = "/root/.hermes"
 UPSTREAM = "http://127.0.0.1:9119"
@@ -612,8 +613,19 @@ async def proxy(request):
             data=body,
             allow_redirects=False,
         ) as resp:
-            excluded = {"transfer-encoding", "content-encoding", "content-length"}
-            proxy_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
+            # ``Set-Cookie`` must be relayed as SEPARATE headers. The dashboard auth
+            # routes set several at once (/auth/password-login sets hermes_session_at,
+            # hermes_session_rt and hermes_session_provider), and a plain dict
+            # comprehension keeps only the LAST duplicate — so a client logging in
+            # through this proxy held an incomplete session and every authenticated
+            # /api/ call came back 401 (observed 2026-10-23 with Hermes Desktop
+            # pointed at this gateway). CIMultiDict + getall preserves all of them.
+            excluded = {"transfer-encoding", "content-encoding", "content-length", "set-cookie"}
+            proxy_headers = CIMultiDict(
+                (k, v) for k, v in resp.headers.items() if k.lower() not in excluded
+            )
+            for cookie in resp.headers.getall("Set-Cookie", []):
+                proxy_headers.add("set-cookie", cookie)
             content = await resp.read()
             if (
                 (request.method, request.path) in RESTART_PATHS
@@ -643,7 +655,9 @@ async def proxy(request):
                         {"error": "invalid_upstream_config"}, status=502
                     )
             if "text/html" in content_type:
-                html_headers = {k: v for k, v in proxy_headers.items() if k.lower() != "content-type"}
+                html_headers = CIMultiDict(
+                    (k, v) for k, v in proxy_headers.items() if k.lower() != "content-type"
+                )
                 html = content.decode("utf-8", errors="replace")
                 html = html.replace("</body>", GATEWAY_WIDGET + "</body>")
                 return web.Response(status=resp.status, headers=html_headers, text=html, content_type="text/html")

@@ -18,12 +18,23 @@ from aiohttp import web, ClientError, ClientSession, WSMsgType
 from multidict import CIMultiDict
 
 HERMES_HOME = "/root/.hermes"
-UPSTREAM = "http://127.0.0.1:9119"
+UPSTREAM = os.environ.get("HERMES_UPSTREAM", "http://127.0.0.1:9119")
 USERNAME = os.environ.get("DASHBOARD_USER", "admin")
 PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 SECRET = secrets.token_bytes(32)
 COOKIE = "hermes_auth"
 MAX_AGE = 7 * 86400
+
+# Who owns the login page.  When the dashboard has its own basic-auth login
+# (HERMES_DASHBOARD_BASIC_AUTH_USERNAME set, which Hermes Desktop's remote
+# sign-in also requires) the dashboard must serve /login itself.  A proxy
+# /login in front of it shadows the dashboard's page and sends every
+# unauthenticated request back to the proxy form, so signing in "reloads the
+# same screen".  Set HERMES_PROXY_LOGIN=proxy to keep the old proxy-only login.
+DASHBOARD_LOGIN = (
+    bool(os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME"))
+    and os.environ.get("HERMES_PROXY_LOGIN", "").lower() != "proxy"
+)
 
 # `/api/config` is useful to the dashboard and to the external health checks,
 # but the upstream gateway serializes provider credentials with the rest of the
@@ -36,7 +47,7 @@ SENSITIVE_CONFIG_KEY = re.compile(
     re.IGNORECASE,
 )
 
-if not PASSWORD:
+if not PASSWORD and not DASHBOARD_LOGIN:
     print("ERROR: DASHBOARD_PASSWORD must be set.", file=sys.stderr)
     sys.exit(1)
 
@@ -308,8 +319,31 @@ async def logout(request):
     return resp
 
 
+async def dashboard_session_ok(request):
+    """True when the request carries a valid dashboard session (asks the dashboard)."""
+    headers = {"Cookie": request.headers["Cookie"]} if "Cookie" in request.headers else {}
+    if "Authorization" in request.headers:
+        headers["Authorization"] = request.headers["Authorization"]
+    if not headers:
+        return False
+    try:
+        async with ClientSession() as session:
+            async with session.get(f"{UPSTREAM}/api/auth/me", headers=headers, allow_redirects=False) as resp:
+                return resp.status == 200
+    except (ClientError, asyncio.TimeoutError):
+        return False
+
+
 @web.middleware
 async def auth_middleware(request, handler):
+    if DASHBOARD_LOGIN:
+        # The dashboard owns /login and every other route; the only thing the
+        # proxy gates itself is the proxy-local gateway restart, using the
+        # dashboard's own session instead of a second cookie.
+        if request.path == "/api/gateway/restart" and not await dashboard_session_ok(request):
+            raise web.HTTPUnauthorized()
+        return await handler(request)
+
     # Proxy-local routes and public dashboard auth bootstrap.
     if request.path in ("/login", "/logout", "/api/health"):
         return await handler(request)
@@ -671,9 +705,10 @@ async def on_startup(app):
 def create_app():
     app = web.Application(middlewares=[auth_middleware])
     app.on_startup.append(on_startup)
-    app.router.add_get("/login", login_page)
-    app.router.add_post("/login", login_post)
-    app.router.add_get("/logout", logout)
+    if not DASHBOARD_LOGIN:
+        app.router.add_get("/login", login_page)
+        app.router.add_post("/login", login_post)
+        app.router.add_get("/logout", logout)
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/gateway/restart", restart_gateway)
     app.router.add_get("/api/gateway/status", gateway_status)

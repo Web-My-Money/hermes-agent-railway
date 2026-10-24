@@ -29,7 +29,9 @@ This template goes beyond a basic Hermes deploy:
 | Variable | Description |
 |---|---|
 | `DASHBOARD_USER` | Login username (default: `admin`) |
-| `DASHBOARD_PASSWORD` | Login password (**required** — deploy will fail without it) |
+| `DASHBOARD_PASSWORD` | Login password (**required** — deploy will fail without it, unless `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` is set) |
+| `HERMES_DASHBOARD_BASIC_AUTH_USERNAME` / `_PASSWORD` | The dashboard's own login (also what Hermes Desktop's remote sign-in uses). When the username is set, the dashboard serves `/login` itself and `DASHBOARD_USER`/`DASHBOARD_PASSWORD` are not used for browser sign-in. |
+| `HERMES_PROXY_LOGIN` | Set to `proxy` to keep the proxy-only cookie login even when the variable above is set |
 | `AUTO_UPDATE` | Pull latest Hermes on every restart (default: `true`, set to `false` to pin version) |
 
 All other configuration is done through the dashboard after deploy.

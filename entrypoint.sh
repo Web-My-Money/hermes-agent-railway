@@ -157,6 +157,16 @@ if [ -f /tmp/wmm-credentials/bin/wmm-ops-load.mjs ] && [ -n "${INFISICAL_MACHINE
   fi
 fi
 
+# Vercel CLI reads VERCEL_TOKEN (service env uses VERCEL_API_TOKEN). Hermes
+# strips VERCEL_TOKEN from agent subprocess env, so write the CLI auth file.
+# After /ops export so a vault token wins when present.
+export VERCEL_TOKEN="${VERCEL_TOKEN:-${VERCEL_API_TOKEN:-}}"
+if [ -n "${VERCEL_TOKEN:-}" ]; then
+  ( umask 077; mkdir -p /root/.local/share/com.vercel.cli
+    printf '{"token":"%s"}\n' "$VERCEL_TOKEN" > /root/.local/share/com.vercel.cli/auth.json )
+  echo "vercel-auth-bootstrap: wrote auth.json"
+fi
+
 if [ -z "${INFISICAL_TOKEN:-}${INFISICAL_MACHINE_IDENTITY_CLIENT_ID:-}" ]; then
   echo "WARN: vault-preflight: no INFISICAL_TOKEN and no machine identity set - every wmm-env run will fail"
 elif command -v infisical >/dev/null 2>&1; then

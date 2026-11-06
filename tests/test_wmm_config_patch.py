@@ -52,14 +52,14 @@ PROVIDER = "custom:Omniroute"
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")
 class FallbackRule(unittest.TestCase):
-    def test_default_is_an_omniroute_combo_not_the_old_grok_id(self):
+    def test_default_fallback_is_unchanged(self):
         module, _ = run_main({"model": {"default": PRIMARY, "provider": PROVIDER}})
-        self.assertEqual(module.FALLBACK_MODEL, "GdogReloaded")
+        self.assertEqual(module.FALLBACK_MODEL, "xai-oauth/grok-4.5")
 
     def test_chain_that_only_repeats_the_primary_gets_the_default(self):
         _, calls = run_main({"model": {"default": PRIMARY, "provider": PROVIDER},
                              "fallback_providers": [{"provider": PROVIDER, "model": PRIMARY}]})
-        self.assertEqual(calls["fallback_providers"], [{"provider": PROVIDER, "model": "GdogReloaded"}])
+        self.assertEqual(calls["fallback_providers"], [{"provider": PROVIDER, "model": "xai-oauth/grok-4.5"}])
 
     def test_env_override_wins_over_the_default(self):
         _, calls = run_main({"model": {"default": PRIMARY, "provider": PROVIDER},

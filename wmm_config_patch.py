@@ -16,11 +16,8 @@ the dashboard sticks:
 3. fallback_providers must not be only the primary model again. It was `gdog free` for
    both, so an outage of that combo had no second path. When every fallback entry
    repeats the primary model, the chain is replaced with HERMES_WMM_FALLBACK_MODEL on
-   the same custom provider (default: the OmniRoute combo `GdogReloaded`, which is what the
-   live config uses as its fallback since 2026-11-04; context/facts/hermes-cloud-config.md in
-   wmm-agents). It is a separate combo on the same gateway; there is no second gateway to use.
-   The value must be an id OmniRoute serves (a combo name or a `provider/model` id). It is
-   written verbatim, so check it against the gateway before changing the default.
+   the same custom provider. That is a different model family on the same gateway;
+   there is no second gateway to use.
 4. Team access guard (fork patch Web-My-Money/hermes-agent#7). Fran
    (HERMES_OWNER_TELEGRAM_ID, default 8635020128) is the Telegram admin
    (platforms.telegram.allow_admin_from); everyone else who pairs is a teammate:
@@ -79,7 +76,7 @@ HOME = os.environ.get("HERMES_HOME", "/root/.hermes")
 CONFIG = os.path.join(HOME, "config.yaml")
 HERMES = os.environ.get("HERMES_BIN", "hermes")
 SKILLS_DIR = os.environ.get("WMM_AGENTS_SKILLS_DIR", "/opt/wmm-agents/skills")
-FALLBACK_MODEL = os.environ.get("HERMES_WMM_FALLBACK_MODEL", "GdogReloaded")
+FALLBACK_MODEL = os.environ.get("HERMES_WMM_FALLBACK_MODEL", "xai-oauth/grok-4.5")
 OWNER_TELEGRAM_ID = os.environ.get("HERMES_OWNER_TELEGRAM_ID", "8635020128").strip()
 # Session-local, non-destructive commands a paired teammate may use.
 TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "title",

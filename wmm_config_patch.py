@@ -62,6 +62,14 @@ the dashboard sticks:
    reads os.environ) kept passing — a oneshot is NOT proof the gateway works. Values are
    upserted from the process env (Railway stays the source of truth: a changed Railway value
    overwrites the .env copy on the next boot); vars not set in the env are left alone.
+9. Every MCP server in mcp_servers starts lazily (`lazy: true`) unless it already sets `lazy`
+   or is disabled. The gateway and the dashboard each launched all three servers
+   (github, supabase, wmm-credentials-gateway) at boot, ~600 MB of node processes on a ~1.1 GB
+   service, billed by the GB-hour, for tools G Dog rarely calls. A lazy server's tools stay in the
+   registry from the on-disk schema cache (so the tool-schema floor in rule 6 does not change) and
+   the process is spawned on the first tool call. The first boot after a server is added or
+   changed still connects eagerly, because that is what writes the cache. Opt a server out with an
+   explicit `lazy: false`; set HERMES_WMM_MCP_LAZY=0 to skip the rule.
 """
 import json
 import os
@@ -84,6 +92,7 @@ TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "ti
 # fnmatch globs (case-insensitive) matched against teammates' terminal commands only.
 COMPRESSION_MAX_TOKENS = int(os.environ.get("HERMES_WMM_COMPRESSION_MAX_TOKENS", "28000"))
 PRUNE_MAX_TOKENS = int(os.environ.get("HERMES_WMM_PRUNE_MAX_TOKENS", "24000"))
+MCP_LAZY = os.environ.get("HERMES_WMM_MCP_LAZY", "1").strip().lower() not in ("0", "false", "no", "off")
 WMM_PLUGINS_DIR = os.environ.get("WMM_PLUGINS_DIR", "/opt/wmm-gdog/plugins")
 TEAM_DENY = ["*pairing*", "*TELEGRAM_ALLOWED_USERS*", "*allow_admin_from*", "*config.yaml*",
              "*hermes config*", "*non_admin_*", "*secret-bearing*", "*/.hermes/secrets*"]
@@ -238,6 +247,11 @@ def main():
         setk("compression.target_ratio", 0.10)
     if "protect_first_n" not in comp:
         setk("compression.protect_first_n", 0)
+
+    if MCP_LAZY:
+        for name, server in (cfg.get("mcp_servers") or {}).items():
+            if isinstance(server, dict) and "lazy" not in server and server.get("enabled", True) is not False:
+                setk(f"mcp_servers.{name}.lazy", True)
 
     providers = cfg.get("custom_providers") or []
     fixed, changed = [], False

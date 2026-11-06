@@ -21,7 +21,7 @@ This template goes beyond a basic Hermes deploy:
 1. Click the **Deploy on Railway** button above
 2. Set `DASHBOARD_PASSWORD` (required)
 3. Deploy — log in at your Railway URL
-4. Add your LLM provider key (e.g. OpenRouter) on the **API Keys** page
+4. Point the model at OmniRoute: the custom provider `Omniroute`, whose URL and key come from the `MODEL_API_URL` and `MODEL_API_KEY` Railway variables. All WMM AI calls go through OmniRoute, per `standards/OMNIROUTE_CLIENT_CONTRACT.md` in the `wmm-agents` repo
 5. Optionally configure Telegram/Discord/Slack tokens and hit **Restart** on the gateway widget
 
 ## Environment Variables
@@ -86,7 +86,7 @@ This is a guard rail, not a sandbox: a teammate's G Dog still has the same termi
 | What | Where | Knobs |
 |---|---|---|
 | Shared WMM facts and skills: `Web-My-Money/wmm-agents` mirrored read-only at boot and hourly | `/opt/wmm-agents`: `skills/` is added to `skills.external_dirs`, `context/INDEX.md` is referenced from `SOUL.md`, and `context/hermes/*.md` is merged into `memories/` by wmm-agents' `context-sync.mjs --pull` | `WMM_AGENTS_REF` (default `main`), `WMM_AGENTS_REFRESH_SECONDS` (default `3600`) |
-| WMM-managed config keys, applied before Hermes starts. Each one only fills a gap, and a timestamped `config.yaml.bak-wmm-config-*` is written when anything changes | `wmm_config_patch.py` | `HERMES_WMM_FALLBACK_MODEL` (default `xai-oauth/grok-4.5`, used when the fallback chain only repeats the primary model) |
+| WMM-managed config keys, applied before Hermes starts. Each one only fills a gap, and a timestamped `config.yaml.bak-wmm-config-*` is written when anything changes | `wmm_config_patch.py` | `HERMES_WMM_FALLBACK_MODEL` (default `GdogReloaded`, an OmniRoute combo, used when the fallback chain only repeats the primary model) |
 
 The Hermes version is `HERMES_AGENT_REF` in the `Dockerfile`: a commit on `Web-My-Money/hermes-agent` `main`, which is upstream's release plus the WMM patches. Bump it by PR, and merging deploys it.
 

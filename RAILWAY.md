@@ -16,11 +16,11 @@ Click the **Deploy on Railway** button, set a `DASHBOARD_PASSWORD`, and deploy. 
 
 ### 2. Add an LLM Provider
 
-Your agent needs an AI model to work. [OpenRouter](https://openrouter.ai/) is the easiest option since it gives access to all major models with a single key.
+Your agent needs an AI model to work. In WMM deployments all AI calls go through OmniRoute, per `standards/OMNIROUTE_CLIENT_CONTRACT.md` in the `wmm-agents` repo. Do not add a direct OpenRouter, Anthropic or OpenAI key.
 
-1. Create an account at [openrouter.ai](https://openrouter.ai/) and generate an API key
-2. In the Hermes dashboard, go to the **API Keys** page
-3. Paste your key into the `OPENROUTER_API_KEY` field and save
+1. Set the `MODEL_API_URL` (the OmniRoute `/v1` endpoint) and `MODEL_API_KEY` (an OmniRoute API key) variables on the Railway service
+2. The Hermes config uses them through the custom provider `Omniroute` (`${MODEL_API_URL}` and `${MODEL_API_KEY}` references; `wmm_config_patch.py` copies them into `$HERMES_HOME/.env` on every boot)
+3. Change the model or fallback from the dashboard, or with `hermes config set`; keep ids to ones OmniRoute serves
 
 ### 3. Set Up a Telegram Bot
 
@@ -52,7 +52,7 @@ Attach a Railway volume so your config, sessions, and memories survive redeploys
 
 ## Dependencies
 
-- At least one LLM provider API key ([OpenRouter](https://openrouter.ai/), [Anthropic](https://console.anthropic.com/), [OpenAI](https://platform.openai.com/), or [DeepSeek](https://platform.deepseek.com/))
+- An OmniRoute endpoint and API key (`MODEL_API_URL`, `MODEL_API_KEY`); AI calls do not go to providers directly
 - A Telegram, Discord, or Slack bot token (if using messaging platforms)
 
 ### Deployment Dependencies
@@ -60,7 +60,7 @@ Attach a Railway volume so your config, sessions, and memories survive redeploys
 - [Hermes Agent Documentation](https://hermes-agent.nousresearch.com/docs)
 - [Web Dashboard Guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
 - [Telegram BotFather](https://t.me/BotFather) (for Telegram setup)
-- [OpenRouter](https://openrouter.ai/) (recommended LLM provider)
+- OmniRoute (WMM's LLM gateway; see `standards/OMNIROUTE_CLIENT_CONTRACT.md` in the `wmm-agents` repo)
 
 ## Why Use Railway?
 

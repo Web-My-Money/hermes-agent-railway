@@ -74,5 +74,33 @@ class FallbackRule(unittest.TestCase):
         self.assertNotIn("fallback_providers", calls)
 
 
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class McpLazyRule(unittest.TestCase):
+    """Rule 9: MCP servers start lazily unless they already say otherwise."""
+
+    SERVERS = {"github": {"command": "npx"}, "wmm-credentials-gateway": {"command": "node"}}
+
+    def test_servers_without_lazy_get_lazy_true(self):
+        _, calls = run_main({"mcp_servers": dict(self.SERVERS)})
+        self.assertIs(calls["mcp_servers.github.lazy"], True)
+        self.assertIs(calls["mcp_servers.wmm-credentials-gateway.lazy"], True)
+
+    def test_explicit_lazy_false_is_left_alone(self):
+        _, calls = run_main({"mcp_servers": {"github": {"command": "npx", "lazy": False}}})
+        self.assertNotIn("mcp_servers.github.lazy", calls)
+
+    def test_disabled_server_is_left_alone(self):
+        _, calls = run_main({"mcp_servers": {"github": {"command": "npx", "enabled": False}}})
+        self.assertNotIn("mcp_servers.github.lazy", calls)
+
+    def test_env_switch_turns_the_rule_off(self):
+        _, calls = run_main({"mcp_servers": dict(self.SERVERS)}, {"HERMES_WMM_MCP_LAZY": "0"})
+        self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
+
+    def test_no_mcp_servers_block_is_fine(self):
+        _, calls = run_main({})
+        self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
+
+
 if __name__ == "__main__":
     unittest.main()

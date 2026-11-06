@@ -62,14 +62,20 @@ the dashboard sticks:
    reads os.environ) kept passing — a oneshot is NOT proof the gateway works. Values are
    upserted from the process env (Railway stays the source of truth: a changed Railway value
    overwrites the .env copy on the next boot); vars not set in the env are left alone.
-9. Every MCP server in mcp_servers starts lazily (`lazy: true`) unless it already sets `lazy`
-   or is disabled. The gateway and the dashboard each launched all three servers
-   (github, supabase, wmm-credentials-gateway) at boot, ~600 MB of node processes on a ~1.1 GB
-   service, billed by the GB-hour, for tools G Dog rarely calls. A lazy server's tools stay in the
-   registry from the on-disk schema cache (so the tool-schema floor in rule 6 does not change) and
-   the process is spawned on the first tool call. The first boot after a server is added or
-   changed still connects eagerly, because that is what writes the cache. Opt a server out with an
-   explicit `lazy: false`; set HERMES_WMM_MCP_LAZY=0 to skip the rule.
+9. The `github` and `supabase` MCP servers run as the vendors' hosted HTTP endpoints, not as
+   `npx` stdio children. The gateway and the dashboard each spawned both (plus
+   wmm-credentials-gateway) at boot: ~600 MB of node processes on a ~1.1 GB service, billed by
+   the GB-hour. `lazy: true` does not help here: both servers answer tools/list with ttlMs 0,
+   which Hermes reads as "never cache", so a lazy entry is always a cache miss and spawns anyway.
+   An HTTP server spawns nothing. The entry keeps its name (tool names stay
+   mcp__github__* / mcp__supabase__*) and is converted only when it is still a stdio entry and
+   the token env var (GH_TOKEN / SUPABASE_ACCESS_TOKEN) is set; rule 8 then copies the token ref
+   into .env. Supabase stays read-only (`?read_only=true`). The hosted GitHub server has 47 tools
+   under different names, so it is filtered to the 17 tools that share a name with the old server
+   plus issue_read/issue_write/pull_request_read/pull_request_review_write, which replace
+   get_issue/create_issue/update_issue/get_pull_request*/create_pull_request_review: ~the same
+   tool-schema floor as rule 6 assumes. Rollback: restore the stdio entry (see the
+   config.yaml.bak-wmm-config-* copy made on the converting boot) and set HERMES_WMM_MCP_HTTP=0.
 """
 import json
 import os
@@ -92,7 +98,23 @@ TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "ti
 # fnmatch globs (case-insensitive) matched against teammates' terminal commands only.
 COMPRESSION_MAX_TOKENS = int(os.environ.get("HERMES_WMM_COMPRESSION_MAX_TOKENS", "28000"))
 PRUNE_MAX_TOKENS = int(os.environ.get("HERMES_WMM_PRUNE_MAX_TOKENS", "24000"))
-MCP_LAZY = os.environ.get("HERMES_WMM_MCP_LAZY", "1").strip().lower() not in ("0", "false", "no", "off")
+MCP_HTTP = os.environ.get("HERMES_WMM_MCP_HTTP", "1").strip().lower() not in ("0", "false", "no", "off")
+GITHUB_MCP_TOOLS = [
+    "add_issue_comment", "create_branch", "create_or_update_file", "create_pull_request",
+    "create_repository", "fork_repository", "get_file_contents", "list_commits", "list_issues",
+    "list_pull_requests", "merge_pull_request", "push_files", "search_code", "search_issues",
+    "search_repositories", "search_users", "update_pull_request_branch",
+    "issue_read", "issue_write", "pull_request_read", "pull_request_review_write"]
+# name -> (token env var, hosted entry). Only a stdio entry (one with `command`) is converted.
+HOSTED_MCP = {
+    "supabase": ("SUPABASE_ACCESS_TOKEN", {
+        "url": "https://mcp.supabase.com/mcp?read_only=true",
+        "headers": {"Authorization": "Bearer ${SUPABASE_ACCESS_TOKEN}"}}),
+    "github": ("GH_TOKEN", {
+        "url": "https://api.githubcopilot.com/mcp/",
+        "headers": {"Authorization": "Bearer ${GH_TOKEN}"},
+        "tools": {"include": GITHUB_MCP_TOOLS}}),
+}
 WMM_PLUGINS_DIR = os.environ.get("WMM_PLUGINS_DIR", "/opt/wmm-gdog/plugins")
 TEAM_DENY = ["*pairing*", "*TELEGRAM_ALLOWED_USERS*", "*allow_admin_from*", "*config.yaml*",
              "*hermes config*", "*non_admin_*", "*secret-bearing*", "*/.hermes/secrets*"]
@@ -248,10 +270,12 @@ def main():
     if "protect_first_n" not in comp:
         setk("compression.protect_first_n", 0)
 
-    if MCP_LAZY:
-        for name, server in (cfg.get("mcp_servers") or {}).items():
-            if isinstance(server, dict) and "lazy" not in server and server.get("enabled", True) is not False:
-                setk(f"mcp_servers.{name}.lazy", True)
+    if MCP_HTTP:
+        servers = cfg.get("mcp_servers") or {}
+        for name, (token_var, hosted) in HOSTED_MCP.items():
+            server = servers.get(name)
+            if isinstance(server, dict) and "command" in server and os.environ.get(token_var):
+                setk(f"mcp_servers.{name}", hosted)
 
     providers = cfg.get("custom_providers") or []
     fixed, changed = [], False

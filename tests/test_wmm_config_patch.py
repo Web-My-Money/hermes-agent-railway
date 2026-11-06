@@ -75,30 +75,52 @@ class FallbackRule(unittest.TestCase):
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")
-class McpLazyRule(unittest.TestCase):
-    """Rule 9: MCP servers start lazily unless they already say otherwise."""
+class McpHostedRule(unittest.TestCase):
+    """Rule 9: github/supabase stdio entries become hosted HTTP entries when their token is set."""
 
-    SERVERS = {"github": {"command": "npx"}, "wmm-credentials-gateway": {"command": "node"}}
+    STDIO = {"github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]},
+             "supabase": {"command": "npx", "args": ["-y", "@supabase/mcp-server-supabase@latest"]},
+             "wmm-credentials-gateway": {"command": "node"}}
+    TOKENS = {"GH_TOKEN": "x", "SUPABASE_ACCESS_TOKEN": "y"}
 
-    def test_servers_without_lazy_get_lazy_true(self):
-        _, calls = run_main({"mcp_servers": dict(self.SERVERS)})
-        self.assertIs(calls["mcp_servers.github.lazy"], True)
-        self.assertIs(calls["mcp_servers.wmm-credentials-gateway.lazy"], True)
+    def run_with(self, servers, env=None, extra_env=None):
+        with mock.patch.dict(os.environ, env if env is not None else self.TOKENS):
+            return run_main({"mcp_servers": servers}, extra_env)[1]
 
-    def test_explicit_lazy_false_is_left_alone(self):
-        _, calls = run_main({"mcp_servers": {"github": {"command": "npx", "lazy": False}}})
-        self.assertNotIn("mcp_servers.github.lazy", calls)
+    def test_stdio_entries_become_hosted_with_token_refs_not_values(self):
+        calls = self.run_with(dict(self.STDIO))
+        self.assertEqual(calls["mcp_servers.supabase"]["url"], "https://mcp.supabase.com/mcp?read_only=true")
+        self.assertEqual(calls["mcp_servers.supabase"]["headers"]["Authorization"],
+                         "Bearer ${SUPABASE_ACCESS_TOKEN}")
+        self.assertEqual(calls["mcp_servers.github"]["headers"]["Authorization"], "Bearer ${GH_TOKEN}")
+        self.assertNotIn("command", calls["mcp_servers.github"])
 
-    def test_disabled_server_is_left_alone(self):
-        _, calls = run_main({"mcp_servers": {"github": {"command": "npx", "enabled": False}}})
-        self.assertNotIn("mcp_servers.github.lazy", calls)
+    def test_github_is_filtered_to_the_known_tool_names(self):
+        calls = self.run_with(dict(self.STDIO))
+        include = calls["mcp_servers.github"]["tools"]["include"]
+        self.assertIn("get_file_contents", include)
+        self.assertIn("pull_request_read", include)
+        self.assertLess(len(include), 30)
+
+    def test_other_servers_are_left_alone(self):
+        calls = self.run_with(dict(self.STDIO))
+        self.assertNotIn("mcp_servers.wmm-credentials-gateway", calls)
+
+    def test_missing_token_leaves_the_stdio_entry(self):
+        calls = self.run_with(dict(self.STDIO), env={"GH_TOKEN": "", "SUPABASE_ACCESS_TOKEN": ""})
+        self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
+
+    def test_already_hosted_entry_is_left_alone(self):
+        calls = self.run_with({"supabase": {"url": "https://mcp.supabase.com/mcp"}})
+        self.assertNotIn("mcp_servers.supabase", calls)
 
     def test_env_switch_turns_the_rule_off(self):
-        _, calls = run_main({"mcp_servers": dict(self.SERVERS)}, {"HERMES_WMM_MCP_LAZY": "0"})
+        calls = self.run_with(dict(self.STDIO), extra_env={"HERMES_WMM_MCP_HTTP": "0"})
         self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
 
     def test_no_mcp_servers_block_is_fine(self):
-        _, calls = run_main({})
+        with mock.patch.dict(os.environ, self.TOKENS):
+            _, calls = run_main({})
         self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
 
 

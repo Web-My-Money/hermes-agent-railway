@@ -140,6 +140,30 @@ class ComboMigrationRule(unittest.TestCase):
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")
+class SessionAffinityRule(unittest.TestCase):
+    """Rule 11: custom providers send the conversation id so the Codex prompt cache is reachable."""
+    BASE = {"model": {"default": "GdogReloaded", "provider": PROVIDER, "context_length": 131072},
+            "fallback_providers": [{"provider": PROVIDER, "model": "GdogHeavy"}]}
+
+    def test_missing_header_is_filled(self):
+        cfg = dict(self.BASE, custom_providers=[{"name": "Omniroute", "base_url": "https://gw/v1", "models": {"a": {}}}])
+        _, calls = run_main(cfg)
+        self.assertEqual(calls["custom_providers"][0]["session_affinity_header"], "x-session-id")
+        self.assertEqual(calls["custom_providers"][0]["models"], {"a": {}})
+
+    def test_existing_header_is_kept(self):
+        cfg = dict(self.BASE, custom_providers=[{"name": "Omniroute", "base_url": "https://gw/v1",
+                                                 "session_affinity_header": "x-custom"}])
+        _, calls = run_main(cfg)
+        self.assertNotIn("custom_providers", calls)
+
+    def test_env_empty_turns_it_off(self):
+        cfg = dict(self.BASE, custom_providers=[{"name": "Omniroute", "base_url": "https://gw/v1"}])
+        _, calls = run_main(cfg, {"HERMES_WMM_SESSION_AFFINITY_HEADER": ""})
+        self.assertNotIn("custom_providers", calls)
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed")
 class McpHostedRule(unittest.TestCase):
     """Rule 9: github/supabase stdio entries become hosted HTTP entries when their token is set."""
 

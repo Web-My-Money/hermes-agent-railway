@@ -88,6 +88,12 @@ the dashboard sticks:
    chosen later in the dashboard is never touched. model.context_length is also filled when
    missing (HERMES_WMM_CONTEXT_LENGTH, default 131072), so the larger window GdogReloaded
    advertises does not change when compaction starts.
+11. Every custom provider gets `session_affinity_header: x-session-id`
+   (HERMES_WMM_SESSION_AFFINITY_HEADER; empty turns the rule off) when it has none. Since OmniRoute
+   v3.8.53 the Codex path sends no `session_id` for a client that presents no session, and Hermes
+   presents none, so the ChatGPT prompt cache read share fell from ~85% to ~15%. With the header,
+   Hermes sends its stable conversation id and OmniRoute restores the cached-prefix path (canary
+   99.5%). Only a missing/empty value is filled, so a header chosen in the dashboard sticks.
 """
 import json
 import os
@@ -107,6 +113,8 @@ PRIMARY_MODEL = os.environ.get("HERMES_WMM_PRIMARY_MODEL", "GdogReloaded")
 HEAVY_MODEL = os.environ.get("HERMES_WMM_HEAVY_MODEL", "GdogHeavy")
 LIGHT_MODEL = os.environ.get("HERMES_WMM_LIGHT_MODEL", "GdogLight")
 CONTEXT_LENGTH = int(os.environ.get("HERMES_WMM_CONTEXT_LENGTH", "131072"))
+# Header NAME Hermes sends with the conversation id on a custom provider (rule 11); "" = off.
+SESSION_AFFINITY_HEADER = os.environ.get("HERMES_WMM_SESSION_AFFINITY_HEADER", "x-session-id").strip()
 RETIRED_COMBOS = {"gdog free", "GdogCode", "MasterG", "HermesAux", "alibaba"}
 COMBO_MIGRATION_MARKER = os.path.join(HOME, ".wmm-combo-migration-2026-11-07")
 OWNER_TELEGRAM_ID = os.environ.get("HERMES_OWNER_TELEGRAM_ID", "8635020128").strip()
@@ -378,6 +386,9 @@ def main():
             else:
                 entry["base_url"] = resolved
                 changed = True
+        if SESSION_AFFINITY_HEADER and not str(entry.get("session_affinity_header") or "").strip():
+            entry["session_affinity_header"] = SESSION_AFFINITY_HEADER
+            changed = True
         fixed.append(entry)
     if changed:
         setk("custom_providers", fixed)

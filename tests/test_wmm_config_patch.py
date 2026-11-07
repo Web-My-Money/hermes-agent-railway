@@ -34,19 +34,23 @@ def load_patch(home, extra_env=None):
     return module
 
 
-def run_main(config, extra_env=None):
-    """Run main() against `config` and return the (key, value) pairs it tried to set."""
+def run_main(config, extra_env=None, migrated=True):
+    """Run main() against `config` and return the (key, value) pairs it tried to set.
+
+    `migrated` pre-creates the rule-10 marker so the other rules are tested on their own."""
     with tempfile.TemporaryDirectory() as home:
         with open(os.path.join(home, "config.yaml"), "w", encoding="utf-8") as f:
             yaml.safe_dump(config, f)
+        if migrated:
+            Path(home, ".wmm-combo-migration-2026-11-07").write_text("test\n")
         module = load_patch(home, extra_env)
         calls = []
-        module.setk = lambda key, value: calls.append((key, value))
+        module.setk = lambda key, value: calls.append((key, value)) or True
         module.main()
         return module, dict(calls)
 
 
-PRIMARY = "gdog free"
+PRIMARY = "GdogReloaded"
 PROVIDER = "custom:Omniroute"
 
 
@@ -70,8 +74,69 @@ class FallbackRule(unittest.TestCase):
 
     def test_existing_distinct_fallback_is_left_alone(self):
         _, calls = run_main({"model": {"default": PRIMARY, "provider": PROVIDER},
-                             "fallback_providers": [{"provider": PROVIDER, "model": "HermesAux"}]})
+                             "fallback_providers": [{"provider": PROVIDER, "model": "GdogHeavy"}]})
         self.assertNotIn("fallback_providers", calls)
+
+
+LEGACY = {
+    "model": {"default": "gdog free", "provider": PROVIDER},
+    "fallback_providers": [{"provider": "Omniroute", "model": "GdogReloaded"}],
+    "moa": {"presets": {"default": {
+        "reference_models": [{"provider": PROVIDER, "model": "GdogCode"}, {"provider": PROVIDER, "model": "GdogHeavy"}],
+        "aggregator": {"provider": PROVIDER, "model": "GdogReloaded"}}}},
+    "auxiliary": {"vision": {"model": "HermesAux"}, "compression": {"model": "gdog free"},
+                  "monitor": {"model": None}, "title_generation": {"model": "HermesAux"}},
+}
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class ComboMigrationRule(unittest.TestCase):
+    """Rule 10: one-time repoint of slots still on retired combos."""
+
+    def test_legacy_config_is_repointed(self):
+        module, calls = run_main(LEGACY, migrated=False)
+        self.assertEqual(calls["model.default"], "GdogReloaded")
+        self.assertEqual(calls["fallback_providers"], [{"provider": "Omniroute", "model": "GdogHeavy"}])
+        self.assertEqual([e["model"] for e in calls["moa.presets.default.reference_models"]],
+                         ["GdogReloaded", "GdogReloaded"])
+        self.assertEqual(calls["moa.presets.default.aggregator.model"], "GdogHeavy")
+        self.assertEqual(calls["auxiliary.vision.model"], "GdogLight")
+        self.assertEqual(calls["auxiliary.title_generation.model"], "GdogLight")
+        self.assertEqual(calls["auxiliary.compression.model"], "GdogReloaded")
+        self.assertNotIn("auxiliary.monitor.model", calls)
+        self.assertEqual(calls["model.context_length"], 131072)
+        # fallback is distinct from the new primary, so rule 3 does not replace it again
+        self.assertNotEqual(calls["fallback_providers"][0]["model"], "xai-oauth/grok-4.5")
+
+    def test_marker_stops_a_second_migration(self):
+        with tempfile.TemporaryDirectory() as home:
+            with open(os.path.join(home, "config.yaml"), "w", encoding="utf-8") as f:
+                yaml.safe_dump(LEGACY, f)
+            module = load_patch(home)
+            calls = []
+            module.setk = lambda key, value: calls.append((key, value)) or True
+            module.main()
+            self.assertTrue(os.path.exists(module.COMBO_MIGRATION_MARKER))
+            calls.clear()
+            module.main()  # same legacy file again: a deliberate dashboard choice must now survive
+            self.assertNotIn("model.default", [k for k, _ in calls])
+            self.assertNotIn("auxiliary.vision.model", [k for k, _ in calls])
+
+    def test_failed_set_keeps_the_migration_pending(self):
+        with tempfile.TemporaryDirectory() as home:
+            with open(os.path.join(home, "config.yaml"), "w", encoding="utf-8") as f:
+                yaml.safe_dump(LEGACY, f)
+            module = load_patch(home)
+            module.setk = lambda key, value: False
+            module.main()
+            self.assertFalse(os.path.exists(module.COMBO_MIGRATION_MARKER))
+
+    def test_modern_config_only_gets_the_marker(self):
+        _, calls = run_main({"model": {"default": "GdogReloaded", "provider": PROVIDER, "context_length": 131072},
+                             "fallback_providers": [{"provider": PROVIDER, "model": "GdogHeavy"}],
+                             "auxiliary": {"vision": {"model": "GdogLight"}}}, migrated=False)
+        for key in ("model.default", "fallback_providers", "auxiliary.vision.model", "model.context_length"):
+            self.assertNotIn(key, calls)
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")

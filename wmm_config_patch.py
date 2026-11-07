@@ -76,6 +76,18 @@ the dashboard sticks:
    get_issue/create_issue/update_issue/get_pull_request*/create_pull_request_review: ~the same
    tool-schema floor as rule 6 assumes. Rollback: restore the stdio entry (see the
    config.yaml.bak-wmm-config-* copy made on the converting boot) and set HERMES_WMM_MCP_HTTP=0.
+10. One-time combo migration (2026-11-07, marker file `.wmm-combo-migration-2026-11-07` in
+   $HERMES_HOME). OmniRoute now has GdogReloaded (main), GdogHeavy (hard reasoning) and GdogLight
+   (small jobs); GdogCode, MasterG, alibaba and HermesAux are being deleted, and `gdog free`
+   becomes the zero-paid-quota fallback chain, no longer a main model. While the marker is absent,
+   every slot still on one of those names is repointed: model.default and a delegation model ->
+   HERMES_WMM_PRIMARY_MODEL (default GdogReloaded); fallback_providers -> HERMES_WMM_HEAVY_MODEL
+   (default GdogHeavy); MoA proposers -> GdogReloaded, MoA aggregators -> GdogHeavy; auxiliary.*.model
+   -> HERMES_WMM_LIGHT_MODEL (default GdogLight), except auxiliary.compression -> GdogReloaded
+   (it writes 5-8K tokens; the small combo was too slow for it). After the marker exists a model
+   chosen later in the dashboard is never touched. model.context_length is also filled when
+   missing (HERMES_WMM_CONTEXT_LENGTH, default 131072), so the larger window GdogReloaded
+   advertises does not change when compaction starts.
 """
 import json
 import os
@@ -91,6 +103,12 @@ CONFIG = os.path.join(HOME, "config.yaml")
 HERMES = os.environ.get("HERMES_BIN", "hermes")
 SKILLS_DIR = os.environ.get("WMM_AGENTS_SKILLS_DIR", "/opt/wmm-agents/skills")
 FALLBACK_MODEL = os.environ.get("HERMES_WMM_FALLBACK_MODEL", "xai-oauth/grok-4.5")
+PRIMARY_MODEL = os.environ.get("HERMES_WMM_PRIMARY_MODEL", "GdogReloaded")
+HEAVY_MODEL = os.environ.get("HERMES_WMM_HEAVY_MODEL", "GdogHeavy")
+LIGHT_MODEL = os.environ.get("HERMES_WMM_LIGHT_MODEL", "GdogLight")
+CONTEXT_LENGTH = int(os.environ.get("HERMES_WMM_CONTEXT_LENGTH", "131072"))
+RETIRED_COMBOS = {"gdog free", "GdogCode", "MasterG", "HermesAux", "alibaba"}
+COMBO_MIGRATION_MARKER = os.path.join(HOME, ".wmm-combo-migration-2026-11-07")
 OWNER_TELEGRAM_ID = os.environ.get("HERMES_OWNER_TELEGRAM_ID", "8635020128").strip()
 # Session-local, non-destructive commands a paired teammate may use.
 TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "title",
@@ -134,8 +152,9 @@ def setk(key, value):
     r = subprocess.run([HERMES, "config", "set", key, arg], capture_output=True, text=True)
     if r.returncode != 0:
         print(f"WARN: wmm-config: could not set {key}: {(r.stderr or r.stdout).strip()[:300]}")
-    else:
-        print(f"wmm-config: set {key}")
+        return False
+    print(f"wmm-config: set {key}")
+    return True
 
 
 def _int_or_none(value):
@@ -215,9 +234,79 @@ def _sync_env_refs_to_dotenv():
     print(f"wmm-config: synced to .env: {', '.join(changed)}")
 
 
+def _remap_models(entries, mapping):
+    """Copy of a list of {provider, model, ...} entries with `model` run through mapping(model)."""
+    out = []
+    for e in entries:
+        e = dict(e or {})
+        e["model"] = mapping(str(e.get("model") or ""))
+        out.append(e)
+    return out
+
+
+def migrate_combos(cfg):
+    """Rule 10. Returns True when the config needs no further migration (marker written)."""
+    if os.path.exists(COMBO_MIGRATION_MARKER):
+        return False
+    ok = True
+
+    def apply(key, value, current):
+        nonlocal ok
+        if value != current:
+            ok = setk(key, value) and ok
+
+    model = cfg.get("model") or {}
+    primary = str(model.get("default") or "")
+    new_primary = PRIMARY_MODEL if primary in RETIRED_COMBOS else primary
+    if new_primary != primary:
+        apply("model.default", new_primary, primary)
+        model["default"] = new_primary
+    chain = cfg.get("fallback_providers") or []
+    if chain:
+        seen, new_chain = set(), []
+        for e in _remap_models(chain, lambda m: HEAVY_MODEL if m in RETIRED_COMBOS or m == new_primary else m):
+            if e["model"] not in seen:
+                seen.add(e["model"])
+                new_chain.append(e)
+        apply("fallback_providers", new_chain, chain)
+        cfg["fallback_providers"] = new_chain
+    deleg = cfg.get("delegation") or {}
+    dm = str(deleg.get("model") or "")
+    if dm in RETIRED_COMBOS or dm.startswith(("codex/gpt-5", "cx/gpt-5")):
+        apply("delegation.model", PRIMARY_MODEL, dm)
+    dfb = deleg.get("fallback_providers") or []
+    if dfb:
+        apply("delegation.fallback_providers",
+              _remap_models(dfb, lambda m: HEAVY_MODEL if m in RETIRED_COMBOS else m), dfb)
+    moa = cfg.get("moa") or {}
+    to_ref = lambda m: PRIMARY_MODEL if m in RETIRED_COMBOS or m == HEAVY_MODEL else m
+    to_agg = lambda m: HEAVY_MODEL if m in RETIRED_COMBOS or m == PRIMARY_MODEL else m
+    scopes = [("moa", moa)] + [(f"moa.presets.{n}", p) for n, p in (moa.get("presets") or {}).items()]
+    for prefix, scope in scopes:
+        refs = scope.get("reference_models") or []
+        if refs:
+            apply(f"{prefix}.reference_models", _remap_models(refs, to_ref), refs)
+        agg = scope.get("aggregator")
+        if isinstance(agg, dict) and agg.get("model"):
+            apply(f"{prefix}.aggregator.model", to_agg(str(agg["model"])), agg["model"])
+    for slot, conf in (cfg.get("auxiliary") or {}).items():
+        m = str((conf or {}).get("model") or "")
+        if m in RETIRED_COMBOS:
+            apply(f"auxiliary.{slot}.model", PRIMARY_MODEL if slot == "compression" else LIGHT_MODEL, m)
+    if ok:
+        with open(COMBO_MIGRATION_MARKER, "w", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S") + "\n")
+        print("wmm-config: combo migration done")
+    return ok
+
+
 def main():
     with open(CONFIG, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
+
+    migrate_combos(cfg)
+    if not (cfg.get("model") or {}).get("context_length"):
+        setk("model.context_length", CONTEXT_LENGTH)
 
     dirs = list((cfg.get("skills") or {}).get("external_dirs") or [])
     if SKILLS_DIR not in dirs:

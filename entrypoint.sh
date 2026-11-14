@@ -350,6 +350,10 @@ python /wmm_config_patch.py || echo "WARN: wmm-config: patch failed (non-fatal)"
 # and must keep working when the model gateway is down.
 ( while sleep "${WMM_AGENTS_REFRESH_SECONDS:-3600}"; do wmm_agents_refresh || true; done ) &
 
+# Agents leave `next dev` / `next start` previews running; each idle server holds
+# 65-215 MB and memory is billed by the GB-hour. Stop Next servers older than 4h.
+( while sleep "${WMM_DEV_SERVER_REAPER_SECONDS:-1800}"; do python /dev_server_reaper.py || true; done ) &
+
 hermes dashboard --host 127.0.0.1 --port 9119 --no-open &
 
 exec python /auth_proxy.py

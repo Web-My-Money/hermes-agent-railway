@@ -58,6 +58,7 @@ RUN mkdir -p /root/.hermes/{cron,sessions,logs,memories,skills,pairing,hooks,ima
 
 COPY auth_proxy.py /auth_proxy.py
 COPY wmm_config_patch.py /wmm_config_patch.py
+COPY dev_server_reaper.py /dev_server_reaper.py
 # WMM plugins, versioned here. /root/.hermes is the volume mount, so they are staged in
 # the image and copied into $HERMES_HOME/plugins by entrypoint.sh on every boot.
 COPY plugins/ /opt/wmm-gdog/plugins/

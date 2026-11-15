@@ -33,15 +33,19 @@ the dashboard sticks:
 5. Every plugin this repo ships (plugins/, copied into $HERMES_HOME/plugins by
    entrypoint.sh) is in plugins.enabled, unless it is listed in plugins.disabled.
    Currently wmm-idea-capture (the capture_idea tool).
-6. Context compression stays under OmniRoute's "heavy request" line. OmniRoute counts a
-   chat estimated at >= 32,000 tokens as heavy and admits only 4 of those at once, shared
-   with the agents and crons, so long Telegram threads got 503 chat_admission_busy.
-   G Dog's fixed floor (system prompt + tool schemas) is ~20-23K tokens on its own, so:
+6. Context compression has a ceiling. G Dog's fixed floor (system prompt + tool schemas) is
+   ~20-23K tokens on its own, so a threshold near it can never be met: compression makes no
+   progress and Hermes blocks it ("compression is currently blocked (structural_backoff)").
+   The old 28000 ceiling (set 2026-09-26 for OmniRoute's 32K "heavy" admission line, 4 in
+   flight then, 8 now) did exactly that on 2026-11-14/15, so the ceiling is 70000, the value
+   the watchdog expects (threshold >= 60000, prune >= 40000):
    - compression.threshold_tokens is a CEILING, HERMES_WMM_COMPRESSION_MAX_TOKENS
-     (default 28000): a missing/null value or one above it is lowered to it; a lower
+     (default 70000): a missing/null value or one above it is lowered to it; a lower
      value is left alone. This is the one rule that overrides a set value.
    - proactive_prune_tokens (the no-LLM tool-result prune), when on, is lowered to
-     HERMES_WMM_PRUNE_MAX_TOKENS (default 24000) so big tool output is trimmed first.
+     HERMES_WMM_PRUNE_MAX_TOKENS (default 60000) so big tool output is trimmed first.
+   - A value equal to the OLD ceiling (28000 / 24000) was written by this rule, not chosen,
+     so it is raised to the current ceiling once.
    - Filled only when missing: tail_mode "legacy" with target_ratio 0.10 (a ~2.8K-token
      verbatim tail; "lean" keeps a 10K minimum tail that cannot fit under the ceiling on
      top of the floor), and protect_first_n 0 (the first messages of a weeks-old chat
@@ -122,8 +126,10 @@ OWNER_TELEGRAM_ID = os.environ.get("HERMES_OWNER_TELEGRAM_ID", "8635020128").str
 TEAM_SLASH_COMMANDS = ["new", "stop", "retry", "undo", "status", "compress", "title",
                        "queue", "steer", "btw", "usage", "context"]
 # fnmatch globs (case-insensitive) matched against teammates' terminal commands only.
-COMPRESSION_MAX_TOKENS = int(os.environ.get("HERMES_WMM_COMPRESSION_MAX_TOKENS", "28000"))
-PRUNE_MAX_TOKENS = int(os.environ.get("HERMES_WMM_PRUNE_MAX_TOKENS", "24000"))
+COMPRESSION_MAX_TOKENS = int(os.environ.get("HERMES_WMM_COMPRESSION_MAX_TOKENS", "70000"))
+PRUNE_MAX_TOKENS = int(os.environ.get("HERMES_WMM_PRUNE_MAX_TOKENS", "60000"))
+# Rule 6 ceilings before 2026-11-15. A stored value equal to one of these was written by rule 6.
+LEGACY_COMPRESSION_CEILING, LEGACY_PRUNE_CEILING = 28000, 24000
 MCP_HTTP = os.environ.get("HERMES_WMM_MCP_HTTP", "1").strip().lower() not in ("0", "false", "no", "off")
 GITHUB_MCP_TOOLS = [
     "add_issue_comment", "create_branch", "create_or_update_file", "create_pull_request",
@@ -355,10 +361,12 @@ def main():
 
     comp = cfg.get("compression") or {}
     tt = _int_or_none(comp.get("threshold_tokens"))
-    if tt is None or tt <= 0 or tt > COMPRESSION_MAX_TOKENS:
+    if (tt is None or tt <= 0 or tt > COMPRESSION_MAX_TOKENS
+            or (tt == LEGACY_COMPRESSION_CEILING and tt < COMPRESSION_MAX_TOKENS)):
         setk("compression.threshold_tokens", COMPRESSION_MAX_TOKENS)
     prune = _int_or_none(comp.get("proactive_prune_tokens"))
-    if prune is not None and prune > PRUNE_MAX_TOKENS:  # 0/unset = prune off: left alone
+    if prune is not None and (prune > PRUNE_MAX_TOKENS  # 0/unset = prune off: left alone
+                              or (prune == LEGACY_PRUNE_CEILING and prune < PRUNE_MAX_TOKENS)):
         setk("compression.proactive_prune_tokens", PRUNE_MAX_TOKENS)
     if "tail_mode" not in comp:
         setk("compression.tail_mode", "legacy")

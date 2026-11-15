@@ -141,8 +141,8 @@ OmniRoute treats a chat estimated at 32,000 tokens or more as "heavy" and runs o
 
 | key | before (2026-09-26) | after |
 |---|---|---|
-| `compression.threshold_tokens` | `100000` | `28000` (a ceiling; `HERMES_WMM_COMPRESSION_MAX_TOKENS`) |
-| `compression.proactive_prune_tokens` | `60000` | `24000` (a ceiling; `HERMES_WMM_PRUNE_MAX_TOKENS`) |
+| `compression.threshold_tokens` | `100000` | `70000` (a ceiling; `HERMES_WMM_COMPRESSION_MAX_TOKENS`; was `28000` until 2026-11-15) |
+| `compression.proactive_prune_tokens` | `60000` | `60000` (a ceiling; `HERMES_WMM_PRUNE_MAX_TOKENS`; was `24000` until 2026-11-15) |
 | `compression.tail_mode` | unset (`lean`) | `legacy` |
 | `compression.target_ratio` | unset (`0.20`) | `0.10` |
 | `compression.protect_first_n` | unset (`3`) | `0` |
@@ -150,3 +150,5 @@ OmniRoute treats a chat estimated at 32,000 tokens or more as "heavy" and runs o
 Unchanged: `threshold 0.55`, `protect_last_n 20`, `micro_compact true`, `abort_on_summary_failure true`, `model.context_length` (filled with 131072 by rule 10 when missing, so GdogReloaded's larger advertised window does not move the compaction point; the absolute `threshold_tokens` ceiling above is what triggers compaction).
 
 The budget is tight. G Dog's fixed floor, sent on every request before any conversation, is about 20-23K tokens: a ~46K-character system prompt (the skills index alone is ~14.6K characters, memory ~13.4K) plus ~44K characters of tool schemas (25 tools). A 2-message oneshot measured 20,009 real input tokens. That leaves roughly 5-8K tokens of conversation before a compaction. `lean` mode keeps a 10K-token tail minimum, which cannot fit, so the tail is `legacy` at 10% of the threshold (~2.8K tokens). If compaction cannot get the real prompt under the threshold twice in a row, Hermes' own anti-thrash breaker pauses auto-compaction for 5 minutes (log line "Compaction did not clear the threshold"). If that shows up, the next lever is the floor (skills index, memory, tool set), not this threshold.
+
+**2026-11-15: the 28000 ceiling was raised to 70000.** It is too close to that 20-23K floor: compression could not clear it, Hermes blocked compression (`compression is currently blocked (structural_backoff)`), and long chats stalled (live on 2026-11-15 02:10Z after the 11-14 redeploy reset the stored 70000 to 28000). 70000 is what the watchdog asserts (`threshold_tokens >= 60000`, `proactive_prune_tokens >= 40000`). A stored `28000` / `24000` is treated as written by the old rule and raised once; any other lower value is left alone. OmniRoute now admits 8 heavy chats at once (`OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT=8`).

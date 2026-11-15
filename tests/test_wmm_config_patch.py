@@ -213,5 +213,41 @@ class McpHostedRule(unittest.TestCase):
         self.assertFalse([k for k in calls if k.startswith("mcp_servers.")])
 
 
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class CompressionCeiling(unittest.TestCase):
+    """Rule 6: 70000 / 60000 ceilings; the old 28000 / 24000 rule-written values are raised once."""
+
+    def calls_for(self, compression, extra_env=None):
+        _, calls = run_main({"compression": compression}, extra_env)
+        return calls
+
+    def test_missing_threshold_gets_the_ceiling(self):
+        self.assertEqual(self.calls_for({}).get("compression.threshold_tokens"), 70000)
+
+    def test_value_above_the_ceiling_is_lowered(self):
+        calls = self.calls_for({"threshold_tokens": 100000, "proactive_prune_tokens": 80000})
+        self.assertEqual(calls.get("compression.threshold_tokens"), 70000)
+        self.assertEqual(calls.get("compression.proactive_prune_tokens"), 60000)
+
+    def test_ceiling_values_are_left_alone(self):
+        calls = self.calls_for({"threshold_tokens": 70000, "proactive_prune_tokens": 48000})
+        self.assertNotIn("compression.threshold_tokens", calls)
+        self.assertNotIn("compression.proactive_prune_tokens", calls)
+
+    def test_old_rule_written_values_are_raised(self):
+        calls = self.calls_for({"threshold_tokens": 28000, "proactive_prune_tokens": 24000})
+        self.assertEqual(calls.get("compression.threshold_tokens"), 70000)
+        self.assertEqual(calls.get("compression.proactive_prune_tokens"), 60000)
+
+    def test_other_lower_choices_are_left_alone(self):
+        calls = self.calls_for({"threshold_tokens": 50000, "proactive_prune_tokens": 0})
+        self.assertNotIn("compression.threshold_tokens", calls)
+        self.assertNotIn("compression.proactive_prune_tokens", calls)
+
+    def test_env_can_still_set_a_lower_ceiling(self):
+        calls = self.calls_for({"threshold_tokens": 70000},
+                               {"HERMES_WMM_COMPRESSION_MAX_TOKENS": "28000"})
+        self.assertEqual(calls.get("compression.threshold_tokens"), 28000)
+
 if __name__ == "__main__":
     unittest.main()
